@@ -132,6 +132,8 @@ class RawRoiProcessor(
         val xyzToCamMatrix = colorTransform.inverseMatrix?.copyOf() ?: invert3x3(camToXyzMatrix)
         val colorMatrixOriginal = colorTransform.inverseMatrix?.copyOf() ?: baseMatrix
         val colorCorrectionGains = metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_GAINS)
+        val argSkip = (args["skipWhiteBalance"] as? Boolean) == true
+        val skipWb = argSkip || colorTransform.source.startsWith("customCamToXyz")
         return RawPipelineConfig(
             rawPath = rawPath,
             roi = roi,
@@ -146,6 +148,7 @@ class RawRoiProcessor(
             xyzToCamMatrix = xyzToCamMatrix,
             colorMatrixSource = colorTransform.source,
             colorMatrixOriginal = colorMatrixOriginal,
+            skipWhiteBalance = skipWb,
         )
     }
 
@@ -162,18 +165,22 @@ class RawRoiProcessor(
             blackLevels = config.blackLevels,
             whiteLevel = config.whiteLevel,
         )
-        val whiteBalanceGains = extractWhiteBalanceGains(
-            config.colorCorrectionGains,
-            config.asShotNeutral,
-        )
-        val balancedRgb = applyWhiteBalance(cameraRgb, whiteBalanceGains)
-        // val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, balancedRgb), D50_WHITE, D65_WHITE)
-        val fallbackXyz = multiplyColorMatrix(config.camToXyzMatrix, balancedRgb)
+        val whiteBalanceGains = if (config.skipWhiteBalance) {
+            doubleArrayOf(1.0, 1.0, 1.0)
+        } else {
+            extractWhiteBalanceGains(
+                config.colorCorrectionGains,
+                config.asShotNeutral,
+            )
+        }
+        val workingRgb = if (config.skipWhiteBalance) cameraRgb else applyWhiteBalance(cameraRgb, whiteBalanceGains)
+        // val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, workingRgb), D50_WHITE, D65_WHITE)
+        val fallbackXyz = multiplyColorMatrix(config.camToXyzMatrix, workingRgb)
         val xyz = fallbackXyz
         val clamped = DoubleArray(xyz.size) { index -> max(0.0, xyz[index]) }
         return RawPipelineResult(
             cameraRgb = cameraRgb,
-            balancedRgb = balancedRgb,
+            balancedRgb = workingRgb,
             whiteBalanceGains = whiteBalanceGains,
             xyz = clamped,
             camToXyzMatrix = config.camToXyzMatrix,
@@ -197,6 +204,7 @@ class RawRoiProcessor(
         val xyzToCamMatrix: DoubleArray?,
         val colorMatrixSource: String,
         val colorMatrixOriginal: DoubleArray,
+        val skipWhiteBalance: Boolean,
     )
 
     private data class RawPipelineResult(

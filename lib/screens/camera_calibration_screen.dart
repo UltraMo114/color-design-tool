@@ -347,11 +347,13 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
           capture: capture,
           normalizedRoi: rect,
           mode: 'raw',
+          skipWhiteBalance: true,
         );
-        if (res.linearRgb.length < 3) {
+        if (res.rawRgb.length < 3 && res.linearRgb.length < 3) {
           throw StateError('ROI returned no RAW linear RGB');
         }
-        linearRgbs.add([res.linearRgb[0], res.linearRgb[1], res.linearRgb[2]]);
+        final rr = (res.rawRgb.length >= 3) ? res.rawRgb : res.linearRgb;
+        linearRgbs.add([rr[0], rr[1], rr[2]]);
       }
       // Solve least squares for camRGB->XYZ
       final M = _solveLeastSquares3x3(linearRgbs, refs.take(patchRects.length).toList());
@@ -728,4 +730,3 @@ class _PreviewPainter extends CustomPainter {
         oldDelegate.cols != cols;
   }
 }
-

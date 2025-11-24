@@ -113,6 +113,7 @@ class NativeCameraChannel {
     required String mode,
     bool transposeCcm = false,
     List<double>? customCamToXyz,
+    bool skipWhiteBalance = false,
   }) async {
     final payload = {
       'dngPath': capture.dngPath,
@@ -127,6 +128,7 @@ class NativeCameraChannel {
       },
       'mode': mode,
       'transposeCcm': transposeCcm,
+      'skipWhiteBalance': skipWhiteBalance,
       if (customCamToXyz != null && customCamToXyz.length >= 9)
         'customCamToXyz': customCamToXyz,
     };
