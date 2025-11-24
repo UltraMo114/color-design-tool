@@ -65,15 +65,6 @@ class PaletteScreen extends StatelessWidget {
               icon: const Icon(Icons.camera_alt_outlined),
             ),
             IconButton(
-              tooltip: 'Calibration',
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CameraCalibrationScreen()),
-                );
-              },
-              icon: const Icon(Icons.science_outlined),
-            ),
-            IconButton(
               tooltip: 'Colorway',
               onPressed: () {
                 Navigator.of(context)
@@ -92,6 +83,15 @@ class PaletteScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Calibration',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CameraCalibrationScreen()),
+              );
+            },
+            icon: const Icon(Icons.science_outlined),
+          ),
           IconButton(
             tooltip: 'Import QTX',
             onPressed: () async {
