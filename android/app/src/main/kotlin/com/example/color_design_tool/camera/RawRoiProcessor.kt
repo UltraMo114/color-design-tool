@@ -715,6 +715,20 @@ class RawRoiProcessor(
         metadata: Map<String, Any?>,
         transpose: Boolean,
     ): ColorTransform {
+        // 0) Highest priority: caller-provided custom 3x3 (row-major, cam->XYZ)
+        runCatching {
+            val candidate = (args["customCamToXyz"] as? List<*>)
+                ?.mapNotNull { (it as? Number)?.toDouble() }
+                ?.toDoubleArray()
+            if (candidate != null && candidate.size >= 9) {
+                val m = if (transpose) transpose3x3(candidate) else candidate.copyOf()
+                return ColorTransform(
+                    matrix = m,
+                    requiresInverse = false,
+                    source = if (transpose) "customCamToXyz_T" else "customCamToXyz",
+                )
+            }
+        }
         metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM)?.let {
             if (!isIdentity3x3(it)) {
                 val m = if (transpose) transpose3x3(it) else it

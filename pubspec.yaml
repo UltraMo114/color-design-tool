@@ -70,6 +70,7 @@ flutter:
     - assets/rgb96.csv
     - assets/display_gog_model.csv
     - assets/ccm.csv
+    - assets/calibration/
     - assets/qtx/
 
   # An image asset can refer to one or more resolution-specific "variants", see

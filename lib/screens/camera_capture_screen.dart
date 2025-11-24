@@ -190,6 +190,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         capture: capture,
         normalizedRoi: roi,
         mode: 'both',
+        customCamToXyz: _customCamToXyz,
       );
       final selectedXyz = targetMode == RoiMode.raw
           ? roiResult.xyz

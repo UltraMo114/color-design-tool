@@ -112,6 +112,7 @@ class NativeCameraChannel {
     required Rect normalizedRoi,
     required String mode,
     bool transposeCcm = false,
+    List<double>? customCamToXyz,
   }) async {
     final payload = {
       'dngPath': capture.dngPath,
@@ -126,6 +127,8 @@ class NativeCameraChannel {
       },
       'mode': mode,
       'transposeCcm': transposeCcm,
+      if (customCamToXyz != null && customCamToXyz.length >= 9)
+        'customCamToXyz': customCamToXyz,
     };
     final result = await _channel.invokeMethod<dynamic>('processRoi', payload);
     if (result is! Map) {
