@@ -583,22 +583,37 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Row(
               children: [
-                SegmentedButton<ChartTemplate>(
-                  segments: const [
-                    ButtonSegment(value: ChartTemplate.mcc4x6, label: Text('MCC 4x6')),
-                    ButtonSegment(value: ChartTemplate.pmcc5x6, label: Text('PMCC 5x6')),
-                  ],
-                  selected: {_template},
-                  onSelectionChanged: (v) {
-                    setState(() => _template = v.first);
-                    _loadDefaultRef();
-                  },
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        SegmentedButton<ChartTemplate>(
+                          segments: const [
+                            ButtonSegment(value: ChartTemplate.mcc4x6, label: Text('MCC 4x6')),
+                            ButtonSegment(value: ChartTemplate.pmcc5x6, label: Text('PMCC 5x6')),
+                          ],
+                          selected: {_template},
+                          onSelectionChanged: (v) {
+                            setState(() => _template = v.first);
+                            _loadDefaultRef();
+                          },
+                        ),
+                        const SizedBox(width: 12),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 360),
+                          child: Text(
+                            _refName ?? 'No reference',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 12),
-                Text(_refName ?? 'No reference'),
-                const Spacer(),
                 IconButton(
-                  tooltip: 'Rotate 90Â°',
+                  tooltip: 'Rotate 90¡ã',
                   onPressed: () => setState(() => _rotation = (_rotation + 1) % 4),
                   icon: const Icon(Icons.rotate_90_degrees_ccw),
                 ),
@@ -731,3 +746,4 @@ class _PreviewPainter extends CustomPainter {
         oldDelegate.cols != cols;
   }
 }
+
