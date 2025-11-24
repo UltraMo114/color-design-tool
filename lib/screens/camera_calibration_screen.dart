@@ -6,6 +6,7 @@ import 'package:colordesign_tool_core/src/common/util.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vector_math/vector_math.dart' show Vector3;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
