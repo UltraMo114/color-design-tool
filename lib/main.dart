@@ -2,10 +2,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
+import 'package:vector_math/vector_math.dart' show Vector3;
 
 import 'providers/palette_provider.dart';
+import 'providers/display_profile_provider.dart';
 import 'screens/camera_capture_screen.dart';
 import 'screens/colorway_screen.dart';
+import 'screens/product_design_screen.dart';
 import 'screens/color_library_search_screen.dart';
 import 'services/color_library_service.dart';
 import 'package:path/path.dart' as path;
@@ -22,8 +25,9 @@ class CDTApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => PaletteProvider()),
+        ChangeNotifierProvider(create: (_) => DisplayProfileProvider()),
         Provider<ColorLibraryService>(
-          create: (_) => ColorLibraryService.withPresetQtx(),
+          create: (_) => ColorLibraryService.withBundledQtx(),
         ),
       ],
       child: MaterialApp(
@@ -46,26 +50,38 @@ class PaletteScreen extends StatelessWidget {
     final provider = context.watch<PaletteProvider>();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ColorWay Buffer'),
+        leadingWidth: 160,
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Camera Capture',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
+                );
+              },
+              icon: const Icon(Icons.camera_alt_outlined),
+            ),
+            IconButton(
+              tooltip: 'Colorway',
+              onPressed: () {
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const ColorwayScreen()));
+              },
+              icon: const Icon(Icons.palette_outlined),
+            ),
+            IconButton(
+              tooltip: 'Product Design',
+              onPressed: () {
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const ProductDesignScreen()));
+              },
+              icon: const Icon(Icons.design_services_outlined),
+            ),
+          ],
+        ),
         actions: [
-          IconButton(
-            tooltip: 'Camera Capture',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
-              );
-            },
-            icon: const Icon(Icons.camera_alt_outlined),
-          ),
-          IconButton(
-            tooltip: 'Colorway',
-            onPressed: () {
-              Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const ColorwayScreen()));
-            },
-            icon: const Icon(Icons.palette_outlined),
-          ),
           IconButton(
             tooltip: 'Import QTX',
             onPressed: () async {
@@ -133,6 +149,7 @@ class _PaletteGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final profile = context.watch<DisplayProfileProvider>();
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 5,
@@ -145,7 +162,7 @@ class _PaletteGrid extends StatelessWidget {
         final isSelected = provider.primarySelection == index;
         final color = isEmpty
             ? Colors.transparent
-            : _colorFromStimulus(provider.getColorAt(index));
+            : profile.colorForStimulus(provider.getColorAt(index));
         return InkWell(
           onTap: isEmpty ? null : () => provider.selectSingle(index),
           child: AnimatedContainer(
@@ -168,6 +185,7 @@ class _PaletteGrid extends StatelessWidget {
   }
 
   Color _colorFromStimulus(ColorStimulus stimulus) {
+    // Unused; kept for reference. Now using DisplayProfileProvider above.
     final rep = stimulus.display_representations['sRGB'];
     if (rep == null) return Colors.grey;
     return Color.fromRGBO(
@@ -218,14 +236,20 @@ class _ColorAttributeCard extends StatelessWidget {
     final labText = lab == null
         ? '--'
         : 'L ${lab[0].toStringAsFixed(2)}  a ${lab[1].toStringAsFixed(2)}  b ${lab[2].toStringAsFixed(2)}';
-    final srgbText = srgb == null
-        ? '--'
-        : 'R ${(srgb.rgb_values[0] * 255).clamp(0, 255).round()}  '
-              'G ${(srgb.rgb_values[1] * 255).clamp(0, 255).round()}  '
-              'B ${(srgb.rgb_values[2] * 255).clamp(0, 255).round()}';
+    // Legacy sRGB display values are superseded below by active profile mapping.
 
     return Builder(
       builder: (context) {
+        // Compute display RGB via active profile for consistency across app.
+        final profile = context.read<DisplayProfileProvider>();
+        final v = stimulus.scientific_core.xyz_value;
+        final rgbVec = profile
+            .mapXyzToRgb(Vector3(v[0], v[1], v[2]))
+          ..clamp(Vector3.zero(), Vector3.all(1.0));
+        final displayText = 'R '
+            '${(rgbVec.x * 255).clamp(0, 255).round()}  '
+            'G ${(rgbVec.y * 255).clamp(0, 255).round()}  '
+            'B ${(rgbVec.z * 255).clamp(0, 255).round()}';
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -236,7 +260,7 @@ class _ColorAttributeCard extends StatelessWidget {
             const SizedBox(height: 12),
             _detailRow('sCAM Iab', sCamText),
             _detailRow('CIELAB Lab', labText),
-            _detailRow('sRGB', srgbText),
+            _detailRow('Display RGB', displayText),
             _detailRow('Source', stimulus.source.type),
             const SizedBox(height: 12),
             Align(

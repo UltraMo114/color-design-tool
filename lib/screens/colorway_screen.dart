@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:vector_math/vector_math.dart' show Vector3;
 
 import '../providers/palette_provider.dart';
+import '../providers/display_profile_provider.dart';
 import 'package:colordesign_tool_core/src/common/util.dart';
 import 'package:colordesign_tool_core/src/utils/config.dart';
 import 'package:colordesign_tool_core/src/utils/display_model.dart';
@@ -24,7 +25,6 @@ class ColorwayScreen extends StatefulWidget {
 }
 
 enum ColorwayMode { ab, lc }
-enum DisplayMappingMode { srgb, calibrated }
 
 class _ColorwayScreenState extends State<ColorwayScreen> {
   // Fixed I (sUCS) value, adjustable via slider
@@ -37,10 +37,7 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
   double hueDeg = 0.0; // for LC mode, fixed hue (0..360)
   int step = 3; // 1..5 grid step size
 
-  // Display mapping mode (sRGB preset vs calibrated GOG model)
-  DisplayMappingMode mappingMode = DisplayMappingMode.srgb;
-  GogDisplayModel? _gogModel;
-  String? _gogError;
+  // Display mapping is now app-wide via DisplayProfileProvider.
 
   // Last selected point in Lab (a*, b*) so it persists across modes
   double? selA;
@@ -55,45 +52,21 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
 
   int get cells => _defaultCells;
 
-  Future<void> _ensureGogLoaded() async {
-    if (_gogModel != null) return;
-    final raw = await rootBundle.loadString('assets/display_gog_model.csv');
-    _gogModel = GogDisplayModel.fromCsvString(raw);
-  }
-
-  Widget _modeMenu() {
-    return PopupMenuButton<DisplayMappingMode>(
+  Widget _modeMenu(BuildContext context) {
+    final profile = context.watch<DisplayProfileProvider>();
+    return PopupMenuButton<DisplayProfileType>(
       tooltip: 'Display mode',
-      initialValue: mappingMode,
-      onSelected: (m) async {
-        if (m == DisplayMappingMode.calibrated) {
-          try {
-            await _ensureGogLoaded();
-            if (!mounted) return;
-            setState(() {
-              mappingMode = m;
-              _gogError = null;
-            });
-          } catch (e) {
-            if (!mounted) return;
-            setState(() {
-              mappingMode = DisplayMappingMode.srgb;
-              _gogError = 'Failed to load calibrated model: $e';
-            });
-          }
-        } else {
-          setState(() {
-            mappingMode = m;
-          });
-        }
+      initialValue: profile.type,
+      onSelected: (t) async {
+        await profile.setType(t);
       },
       itemBuilder: (context) => const [
         PopupMenuItem(
-          value: DisplayMappingMode.srgb,
+          value: DisplayProfileType.srgb,
           child: Text('sRGB'),
         ),
         PopupMenuItem(
-          value: DisplayMappingMode.calibrated,
+          value: DisplayProfileType.calibrated,
           child: Text('Calibrated'),
         ),
       ],
@@ -107,7 +80,7 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
       appBar: AppBar(
         title: const Text('Colorway'),
         actions: [
-          _modeMenu(),
+          _modeMenu(context),
         ],
       ),
       body: Column(
@@ -276,17 +249,15 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
                     Positioned(
                       left: padding + 8,
                       bottom: 8,
-                      child: _ScamPanel(
-                        mode: mode,
-                        iValue: iValue,
-                        selA: selA,
-                        selB: selB,
-                        selJ: selJ,
-                        selC: selC,
-                        hueDeg: hueDeg,
-                        mappingMode: mappingMode,
-                        gogModel: _gogModel,
-                      ),
+                    child: _ScamPanel(
+                      mode: mode,
+                      iValue: iValue,
+                      selA: selA,
+                      selB: selB,
+                      selJ: selJ,
+                      selC: selC,
+                      hueDeg: hueDeg,
+                    ),
                     ),
                     Positioned(
                       right: padding + 8,
@@ -353,12 +324,8 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
   ColorStimulus _withDisplayMapping(ColorStimulus stim) {
     final xyz = stim.scientific_core.xyz_value;
     final xyzVec = Vector3(xyz[0], xyz[1], xyz[2]);
-    Vector3 rgb;
-    if (mappingMode == DisplayMappingMode.calibrated && _gogModel != null) {
-      rgb = _gogModel!.xyzToRgb(xyzVec);
-    } else {
-      rgb = _srgbModel.xyzToRgb(xyzVec);
-    }
+    final profile = context.read<DisplayProfileProvider>();
+    final rgb = profile.mapXyzToRgb(xyzVec);
     final clamped = rgb.clone()..clamp(Vector3.zero(), Vector3.all(1.0));
     final rep = DisplayRepresentation(
       color_space_name: 'sRGB',
@@ -443,6 +410,7 @@ class _PlaneCanvas extends StatelessWidget {
           selB: selB,
           selJ: selJ,
           selC: selC,
+          mapXyzToRgb: context.read<DisplayProfileProvider>().mapXyzToRgb,
         ),
       ),
     );
@@ -460,6 +428,7 @@ class _PlanePainter extends CustomPainter {
   final double? selB;
   final double? selJ;
   final double? selC;
+  final Vector3 Function(Vector3 xyz) mapXyzToRgb;
 
   _PlanePainter({
     required this.iValue,
@@ -472,6 +441,7 @@ class _PlanePainter extends CustomPainter {
     required this.selB,
     required this.selJ,
     required this.selC,
+    required this.mapXyzToRgb,
   }) : _surroundParams =
            scamSurroundParams[globalViewingConditions.surround.toLowerCase()] {
     if (_surroundParams == null) {
@@ -520,7 +490,7 @@ class _PlanePainter extends CustomPainter {
             l_a: globalViewingConditions.la,
             surround: globalViewingConditions.surround,
           );
-          final rgb = _srgbModel.xyzToRgb(xyz);
+          final rgb = mapXyzToRgb(xyz);
           final isOOG = _isOutOfGamut(rgb);
           rgb.clamp(Vector3.zero(), Vector3.all(1.0));
           final color = isOOG
@@ -549,7 +519,7 @@ class _PlanePainter extends CustomPainter {
           l_a: globalViewingConditions.la,
           surround: globalViewingConditions.surround,
         );
-        final rgb = _srgbModel.xyzToRgb(xyz);
+        final rgb = mapXyzToRgb(xyz);
 
         final isOOG = _isOutOfGamut(rgb);
         rgb.clamp(Vector3.zero(), Vector3.all(1.0));
@@ -781,8 +751,6 @@ class _ScamPanel extends StatelessWidget {
   final double? selJ;
   final double? selC;
   final double hueDeg;
-  final DisplayMappingMode mappingMode;
-  final GogDisplayModel? gogModel;
 
   const _ScamPanel({
     required this.mode,
@@ -792,13 +760,11 @@ class _ScamPanel extends StatelessWidget {
     required this.selJ,
     required this.selC,
     required this.hueDeg,
-    required this.mappingMode,
-    required this.gogModel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final info = _buildInfo();
+    final info = _buildInfo(context);
     final previewColor = info?.previewColor ?? Colors.grey;
 
     return Material(
@@ -833,17 +799,14 @@ class _ScamPanel extends StatelessWidget {
                     style: const TextStyle(fontSize: 12),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    'sRGB ${info.hex}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                  Text('Display ${info.hex}', style: const TextStyle(fontSize: 12)),
                 ],
               ),
       ),
     );
   }
 
-  _ColorInfo? _buildInfo() {
+  _ColorInfo? _buildInfo(BuildContext context) {
     Vector3? jch;
     if (mode == ColorwayMode.ab) {
       if (selA == null || selB == null) return null;
@@ -869,12 +832,8 @@ class _ScamPanel extends StatelessWidget {
       l_a: globalViewingConditions.la,
       surround: globalViewingConditions.surround,
     );
-    Vector3 rgb;
-    if (mappingMode == DisplayMappingMode.calibrated && gogModel != null) {
-      rgb = gogModel!.xyzToRgb(xyz);
-    } else {
-      rgb = _srgbModel.xyzToRgb(xyz);
-    }
+    final profile = context.read<DisplayProfileProvider>();
+    final rgb = profile.mapXyzToRgb(xyz);
     final clamped = rgb.clone()..clamp(Vector3.zero(), Vector3.all(1.0));
     final color = Color.fromRGBO(
       (clamped.x * 255).round(),

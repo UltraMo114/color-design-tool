@@ -111,6 +111,7 @@ class RawRoiProcessor(
         roi: Rect,
         metadata: Map<String, Any?>,
         asShotNeutral: DoubleArray?,
+        transposeCcm: Boolean,
     ): RawPipelineConfig {
         val rowStride = metadata["rowStride"].toIntOrDefault(-1)
         val pixelStride = metadata["pixelStride"].toIntOrDefault(-1)
@@ -123,7 +124,7 @@ class RawRoiProcessor(
         val cfaPattern = metadata["cfaPattern"].toIntOrDefault(
             CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
         )
-        val colorTransform = selectWorkingColorTransform(metadata)
+        val colorTransform = selectWorkingColorTransform(metadata, transposeCcm)
         val baseMatrix = colorTransform.matrix.copyOf()
         val camToXyzMatrix = if (colorTransform.requiresInverse) {
             invert3x3(baseMatrix) ?: baseMatrix
@@ -170,8 +171,9 @@ class RawRoiProcessor(
         val balancedRgb = applyWhiteBalance(cameraRgb, whiteBalanceGains)
         val rawpyComputation = runRawpySandbox(cameraRgb, config.asShotNeutral, metadata)
         val rawpyResult = rawpyComputation.result
-        val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, balancedRgb), D50_WHITE, D65_WHITE)
-        val xyz = rawpyResult?.xyz ?: fallbackXyz
+        // val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, balancedRgb), D50_WHITE, D65_WHITE)
+        val fallbackXyz = multiplyColorMatrix(config.camToXyzMatrix, balancedRgb)
+        val xyz = fallbackXyz
         val clamped = DoubleArray(xyz.size) { index -> max(0.0, xyz[index]) }
         return RawPipelineResult(
             cameraRgb = cameraRgb,
@@ -300,11 +302,13 @@ class RawRoiProcessor(
         }
 
         val rawContext = if (mode.includesRaw()) {
+            val transposeCcm = true
             buildRawPipelineContext(
                 rawPath = rawPath!!,
                 roi = rawRect ?: throw IllegalArgumentException("Invalid RAW dimensions"),
                 metadata = workingMetadata,
                 asShotNeutral = asShotNeutral,
+                transposeCcm = transposeCcm,
             )
         } else {
             null
@@ -775,17 +779,23 @@ class RawRoiProcessor(
         val inverseMatrix: DoubleArray? = null,
     )
 
-    private fun selectWorkingColorTransform(metadata: Map<String, Any?>): ColorTransform {
+    private fun selectWorkingColorTransform(
+        metadata: Map<String, Any?>,
+        transpose: Boolean,
+    ): ColorTransform {
         metadata.toDoubleArray("colorCorrectionTransform")?.let {
             if (!isIdentity3x3(it)) {
-                return ColorTransform(it, requiresInverse = false, source = "colorCorrectionTransform")
+                val m = if (transpose) transpose3x3(it) else it
+                return ColorTransform(m, requiresInverse = false, source = if (transpose) "colorCorrectionTransform_T" else "colorCorrectionTransform")
             }
         }
+        val base = if (transpose) transpose3x3(RAWPY_CAM_TO_XYZ) else RAWPY_CAM_TO_XYZ.copyOf()
+        val inv = if (transpose) transpose3x3(RAWPY_XYZ_TO_CAM) else RAWPY_XYZ_TO_CAM.copyOf()
         return ColorTransform(
-            matrix = RAWPY_CAM_TO_XYZ.copyOf(),
+            matrix = base,
             requiresInverse = false,
-            source = "rawpy_static",
-            inverseMatrix = RAWPY_XYZ_TO_CAM.copyOf(),
+            source = if (transpose) "rawpy_static_T" else "rawpy_static",
+            inverseMatrix = inv,
         )
     }
 
@@ -804,6 +814,15 @@ class RawRoiProcessor(
             }
         }
         return true
+    }
+
+    private fun transpose3x3(matrix: DoubleArray): DoubleArray {
+        if (matrix.size < 9) return matrix.copyOf()
+        return doubleArrayOf(
+            matrix[0], matrix[3], matrix[6],
+            matrix[1], matrix[4], matrix[7],
+            matrix[2], matrix[5], matrix[8],
+        )
     }
 
 }

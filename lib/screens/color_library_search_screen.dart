@@ -1,6 +1,9 @@
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vector_math/vector_math.dart' show Vector3;
+
+import '../providers/display_profile_provider.dart';
 
 import '../services/color_library_service.dart';
 
@@ -59,16 +62,16 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final lab = widget.target.appearance?.lab_value;
-    final srgb = widget.target.display_representations['sRGB'];
-
-    final targetColor = (srgb == null || srgb.rgb_values.length < 3)
-        ? Colors.grey
-        : Color.fromRGBO(
-            (srgb.rgb_values[0] * 255).clamp(0, 255).round(),
-            (srgb.rgb_values[1] * 255).clamp(0, 255).round(),
-            (srgb.rgb_values[2] * 255).clamp(0, 255).round(),
-            1,
-          );
+    final profile = context.read<DisplayProfileProvider>();
+    final v = widget.target.scientific_core.xyz_value;
+    final vec = profile.mapXyzToRgb(Vector3(v[0], v[1], v[2]))
+      ..clamp(Vector3.zero(), Vector3.all(1.0));
+    final targetColor = Color.fromRGBO(
+      (vec.x * 255).clamp(0, 255).round(),
+      (vec.y * 255).clamp(0, 255).round(),
+      (vec.z * 255).clamp(0, 255).round(),
+      1,
+    );
 
     final labText = lab == null
         ? '--'
@@ -184,17 +187,18 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
       itemBuilder: (context, index) {
         final match = _matches[index];
         final s = match.stimulus;
-        final srgb = s.display_representations['sRGB'];
+        final profile = context.read<DisplayProfileProvider>();
+        final v = s.scientific_core.xyz_value;
+        final vec = profile.mapXyzToRgb(Vector3(v[0], v[1], v[2]))
+          ..clamp(Vector3.zero(), Vector3.all(1.0));
         final lab = s.appearance?.lab_value;
 
-        final color = (srgb == null || srgb.rgb_values.length < 3)
-            ? Colors.grey
-            : Color.fromRGBO(
-                (srgb.rgb_values[0] * 255).clamp(0, 255).round(),
-                (srgb.rgb_values[1] * 255).clamp(0, 255).round(),
-                (srgb.rgb_values[2] * 255).clamp(0, 255).round(),
-                1,
-              );
+        final color = Color.fromRGBO(
+          (vec.x * 255).clamp(0, 255).round(),
+          (vec.y * 255).clamp(0, 255).round(),
+          (vec.z * 255).clamp(0, 255).round(),
+          1,
+        );
 
         final labText = lab == null
             ? '--'
@@ -227,4 +231,3 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
     );
   }
 }
-

@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:colordesign_tool_core/src/io/qtx_parser.dart';
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 class ColorLibrarySource {
   const ColorLibrarySource({
@@ -82,6 +86,36 @@ class ColorLibraryService {
     );
   }
 
+  /// Factory that loads QTX files bundled as Flutter assets under `assets/qtx/`.
+  ///
+  /// Uses a lazy copy-once strategy: on first load, each asset is copied to the
+  /// application documents directory (under `qtx/`) and then read from there
+  /// using the existing file-based parser.
+  factory ColorLibraryService.withBundledQtx() {
+    // Keep the list in sync with pubspec assets (assets/qtx/...).
+    // Use stable IDs without spaces for display grouping.
+    return ColorLibraryService(
+      sources: const [
+        ColorLibrarySource(
+          id: 'Munsell_1560',
+          path: 'asset:assets/qtx/Munsell_1560colors.QTX',
+        ),
+        ColorLibrarySource(
+          id: 'NCS_1749',
+          path: 'asset:assets/qtx/NCS_1749colors.QTX',
+        ),
+        ColorLibrarySource(
+          id: 'Pantone_Polyester_1925',
+          path: 'asset:assets/qtx/Pantone polyester1925colors.QTX',
+        ),
+        ColorLibrarySource(
+          id: 'Color2',
+          path: 'asset:assets/qtx/color2.qtx',
+        ),
+      ],
+    );
+  }
+
   final List<ColorLibrarySource> _sources;
   final List<_LibraryEntry> _entries = [];
 
@@ -126,7 +160,8 @@ class ColorLibraryService {
 
     try {
       for (final src in _sources.where((s) => s.enabled)) {
-        final stimuli = await createStimuliFromQtx(src.path);
+        final effectivePath = await _resolvePath(src.path);
+        final stimuli = await createStimuliFromQtx(effectivePath);
         if (stimuli.isEmpty) {
           debugPrint(
             'ColorLibraryService: no entries loaded from ${src.path}',
@@ -219,5 +254,40 @@ class ColorLibraryService {
     }
     return matches;
   }
-}
 
+  /// Resolves a configured source path to a concrete local file path.
+  ///
+  /// - If the path starts with `asset:` it copies the asset to
+  ///   `<app-documents>/qtx/<basename>` on first use and returns that path.
+  /// - Otherwise returns the path unchanged.
+  Future<String> _resolvePath(String configuredPath) async {
+    const prefix = 'asset:';
+    if (!configuredPath.startsWith(prefix)) {
+      return configuredPath;
+    }
+    final assetKey = configuredPath.substring(prefix.length);
+
+    // Determine destination path under app documents/qtx/
+    final docsDir = await getApplicationDocumentsDirectory();
+    final targetDir = Directory(p.join(docsDir.path, 'qtx'));
+    if (!await targetDir.exists()) {
+      await targetDir.create(recursive: true);
+    }
+    final fileName = p.basename(assetKey);
+    final outPath = p.join(targetDir.path, fileName);
+    final outFile = File(outPath);
+    if (!await outFile.exists()) {
+      try {
+        final data = await rootBundle.load(assetKey);
+        await outFile.writeAsBytes(
+          data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          flush: true,
+        );
+      } catch (e) {
+        debugPrint('ColorLibraryService: failed to materialize asset $assetKey: $e');
+        rethrow;
+      }
+    }
+    return outPath;
+  }
+}

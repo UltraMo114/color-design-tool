@@ -360,43 +360,52 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   }
 
   Future<void> _loadCustomCcm() async {
+    List<double>? parsed;
     try {
+      // 1) Preferred: user‑supplied CSV placed by the app in roi_exports/.
       final dir = await _getDumpDirectory();
       final file = File(p.join(dir.path, _customCcmFilename));
-      if (!await file.exists()) {
-        if (mounted) {
-          setState(() => _customCamToXyz = null);
-        }
-        return;
+      if (await file.exists()) {
+        final raw = await file.readAsString();
+        parsed = _parseCcmCsv(raw);
       }
-      final raw = await file.readAsString();
-      final firstLine = raw
-          .split(RegExp(r'\r?\n'))
-          .firstWhere((line) => line.trim().isNotEmpty, orElse: () => '');
-      final tokens = firstLine
-          .split(RegExp(r'[,\s]+'))
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty);
-      final values = <double>[];
-      for (final token in tokens) {
-        final v = double.tryParse(token);
-        if (v != null) {
-          values.add(v);
+
+      // 2) Fallback: bundled default at assets/ccm.csv (registered in pubspec).
+      if (parsed == null) {
+        try {
+          final rawAsset = await rootBundle.loadString('assets/ccm.csv');
+          parsed = _parseCcmCsv(rawAsset);
+        } catch (_) {
+          // Asset not present or unreadable; keep null to disable RAW.
         }
-        if (values.length == 9) break;
-      }
-      if (mounted) {
-        setState(() {
-          _customCamToXyz = values.length == 9 ? values : null;
-        });
       }
     } catch (e, stack) {
-      debugPrint('Failed to load custom CCM CSV: $e');
+      debugPrint('Failed to locate CCM CSV: $e');
       debugPrint('$stack');
-      if (mounted) {
-        setState(() => _customCamToXyz = null);
-      }
     }
+
+    if (mounted) {
+      setState(() {
+        _customCamToXyz = parsed;
+      });
+    }
+  }
+
+  // Parses a 3x3 CCM from CSV text. Accepts either a single line with 9
+  // numbers or a 3-line 3×3 matrix. Returns null if fewer than 9 numbers.
+  List<double>? _parseCcmCsv(String raw) {
+    // Split by commas, whitespace, and newlines; collect first 9 parsable doubles.
+    final tokens = raw
+        .split(RegExp(r'[\s,;]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty);
+    final values = <double>[];
+    for (final t in tokens) {
+      final v = double.tryParse(t);
+      if (v != null) values.add(v);
+      if (values.length == 9) break;
+    }
+    return values.length == 9 ? values : null;
   }
 
   List<String> _formatVector(List<double>? values, List<String> labels) {
