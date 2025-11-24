@@ -511,78 +511,78 @@ class NativeCameraCaptureActivity : AppCompatActivity() {
         val chars = characteristics
         val activeArray = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         if (activeArray != null) {
-            bundle.putInt("activeArrayWidth", activeArray.width())
-            bundle.putInt("activeArrayHeight", activeArray.height())
+            bundle.putInt(MetadataKeys.ACTIVE_ARRAY_WIDTH, activeArray.width())
+            bundle.putInt(MetadataKeys.ACTIVE_ARRAY_HEIGHT, activeArray.height())
         }
         jpegSize?.let {
-            bundle.putInt("jpegWidth", it.width)
-            bundle.putInt("jpegHeight", it.height)
+            bundle.putInt(MetadataKeys.JPEG_WIDTH, it.width)
+            bundle.putInt(MetadataKeys.JPEG_HEIGHT, it.height)
         }
         rawSize?.let {
-            bundle.putInt("rawWidth", it.width)
-            bundle.putInt("rawHeight", it.height)
+            bundle.putInt(MetadataKeys.RAW_WIDTH, it.width)
+            bundle.putInt(MetadataKeys.RAW_HEIGHT, it.height)
         }
         previewSize?.let {
-            bundle.putInt("previewWidth", it.width)
-            bundle.putInt("previewHeight", it.height)
+            bundle.putInt(MetadataKeys.PREVIEW_WIDTH, it.width)
+            bundle.putInt(MetadataKeys.PREVIEW_HEIGHT, it.height)
         }
-        bundle.putLong("timestamp", System.currentTimeMillis())
-        bundle.putString("cameraId", cameraId)
+        bundle.putLong(MetadataKeys.TIMESTAMP, System.currentTimeMillis())
+        bundle.putString(MetadataKeys.CAMERA_ID, cameraId)
         chars?.get(CameraCharacteristics.SENSOR_ORIENTATION)?.let {
-            bundle.putInt("sensorOrientation", it)
+            bundle.putInt(MetadataKeys.SENSOR_ORIENTATION, it)
         }
         chars?.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.let {
-            bundle.putInt("whiteLevel", it)
+            bundle.putInt(MetadataKeys.WHITE_LEVEL, it)
         }
         chars?.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)?.let {
-            bundle.putInt("cfaPattern", it)
+            bundle.putInt(MetadataKeys.CFA_PATTERN, it)
         }
         chars?.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let { pattern ->
             val arr = IntArray(4)
             pattern.copyTo(arr, 0)
-            bundle.putIntArray("blackLevelPattern", arr)
+            bundle.putIntArray(MetadataKeys.BLACK_LEVEL_PATTERN, arr)
         }
         chars?.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("colorMatrix1", matrix)
-            bundle.putDoubleArray("sensorColorTransform1", matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM_1, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("colorMatrix2", matrix)
-            bundle.putDoubleArray("sensorColorTransform2", matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM_2, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("forwardMatrix1", matrix)
-            bundle.putDoubleArray("sensorForwardMatrix1", matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX_1, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("forwardMatrix2", matrix)
-            bundle.putDoubleArray("sensorForwardMatrix2", matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX_2, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.let {
             bundle.putInt("referenceIlluminant1", it.toInt())
-            bundle.putInt("sensorReferenceIlluminant1", it.toInt())
+            bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT_1, it.toInt())
         }
         chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.let {
             bundle.putInt("referenceIlluminant2", it.toInt())
-            bundle.putInt("sensorReferenceIlluminant2", it.toInt())
+            bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT_2, it.toInt())
         }
         val capture = synchronized(captureLock) { currentCapture }
-        capture.rowStride?.let { bundle.putInt("rowStride", it) }
-        capture.pixelStride?.let { bundle.putInt("pixelStride", it) }
-        capture.rawBufferPath?.let { bundle.putString("rawBufferPath", it) }
+        capture.rowStride?.let { bundle.putInt(MetadataKeys.ROW_STRIDE, it) }
+        capture.pixelStride?.let { bundle.putInt(MetadataKeys.PIXEL_STRIDE, it) }
+        capture.rawBufferPath?.let { bundle.putString(MetadataKeys.RAW_BUFFER_PATH, it) }
         latestCaptureResult.get()?.let { result ->
             result.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
-                bundle.putDoubleArray("colorCorrectionGains", it.toDoubleArray())
+                bundle.putDoubleArray(MetadataKeys.COLOR_CORRECTION_GAINS, it.toDoubleArray())
             }
             result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let {
-                bundle.putDoubleArray("colorCorrectionTransform", it.toDoubleArray())
+                bundle.putDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM, it.toDoubleArray())
             }
             result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let {
-                bundle.putDoubleArray("asShotNeutral", rationalArrayToDouble(it))
+                bundle.putDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL, rationalArrayToDouble(it))
             }
         }
         return bundle

@@ -36,10 +36,8 @@ class RawRoiProcessor(
             0.4323053, 0.5183603, 0.0492912,
             -0.0085287, 0.0400428, 0.9684867,
         )
-        // Camera RGB -> XYZ matrix tuned against rawpy's sRGB output for a
-        // representative ROI. This replaces the earlier static matrix built
-        // directly from the DNG ColorMatrix so that our RAW pipeline aligns
-        // more closely with rawpy's visible render.
+        // Default Camera RGB -> XYZ matrix used when no per-capture
+        // color correction transform is available.
         private val RAWPY_CAM_TO_XYZ = doubleArrayOf(
             0.45454840, 0.10688300, 0.07675672,
             0.07543547, 0.41522814, 0.08160625,
@@ -92,8 +90,8 @@ class RawRoiProcessor(
         metadata: Map<String, Any?>,
         jpegOrientationDeg: Int,
     ): Rect? {
-        val rawWidth = metadata["rawWidth"].toIntOrDefault(metadata["activeArrayWidth"])
-        val rawHeight = metadata["rawHeight"].toIntOrDefault(metadata["activeArrayHeight"])
+        val rawWidth = metadata[MetadataKeys.RAW_WIDTH].toIntOrDefault(metadata[MetadataKeys.ACTIVE_ARRAY_WIDTH])
+        val rawHeight = metadata[MetadataKeys.RAW_HEIGHT].toIntOrDefault(metadata[MetadataKeys.ACTIVE_ARRAY_HEIGHT])
         if (rawWidth <= 0 || rawHeight <= 0) return null
         // normalizedRoi is expressed in the same upright coordinate system as the
         // JPEG preview. To map it into RAW buffer coordinates we need to apply
@@ -113,15 +111,15 @@ class RawRoiProcessor(
         asShotNeutral: DoubleArray?,
         transposeCcm: Boolean,
     ): RawPipelineConfig {
-        val rowStride = metadata["rowStride"].toIntOrDefault(-1)
-        val pixelStride = metadata["pixelStride"].toIntOrDefault(-1)
+        val rowStride = metadata[MetadataKeys.ROW_STRIDE].toIntOrDefault(-1)
+        val pixelStride = metadata[MetadataKeys.PIXEL_STRIDE].toIntOrDefault(-1)
         if (rowStride <= 0 || pixelStride <= 0) {
             throw IllegalArgumentException("Missing RAW stride metadata")
         }
-        val whiteLevel = metadata["whiteLevel"].toIntOrDefault(0).coerceAtLeast(1)
-        val blackPattern = (metadata["blackLevelPattern"] as? List<*>)
+        val whiteLevel = metadata[MetadataKeys.WHITE_LEVEL].toIntOrDefault(0).coerceAtLeast(1)
+        val blackPattern = (metadata[MetadataKeys.BLACK_LEVEL_PATTERN] as? List<*>)
             ?.mapNotNull { (it as? Number)?.toInt() } ?: listOf(0, 0, 0, 0)
-        val cfaPattern = metadata["cfaPattern"].toIntOrDefault(
+        val cfaPattern = metadata[MetadataKeys.CFA_PATTERN].toIntOrDefault(
             CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
         )
         val colorTransform = selectWorkingColorTransform(metadata, transposeCcm)
@@ -133,7 +131,7 @@ class RawRoiProcessor(
         }
         val xyzToCamMatrix = colorTransform.inverseMatrix?.copyOf() ?: invert3x3(camToXyzMatrix)
         val colorMatrixOriginal = colorTransform.inverseMatrix?.copyOf() ?: baseMatrix
-        val colorCorrectionGains = metadata.toDoubleArray("colorCorrectionGains")
+        val colorCorrectionGains = metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_GAINS)
         return RawPipelineConfig(
             rawPath = rawPath,
             roi = roi,
@@ -169,8 +167,6 @@ class RawRoiProcessor(
             config.asShotNeutral,
         )
         val balancedRgb = applyWhiteBalance(cameraRgb, whiteBalanceGains)
-        val rawpyComputation = runRawpySandbox(cameraRgb, config.asShotNeutral, metadata)
-        val rawpyResult = rawpyComputation.result
         // val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, balancedRgb), D50_WHITE, D65_WHITE)
         val fallbackXyz = multiplyColorMatrix(config.camToXyzMatrix, balancedRgb)
         val xyz = fallbackXyz
@@ -180,12 +176,10 @@ class RawRoiProcessor(
             balancedRgb = balancedRgb,
             whiteBalanceGains = whiteBalanceGains,
             xyz = clamped,
-            rawpy = rawpyResult,
             camToXyzMatrix = config.camToXyzMatrix,
             xyzToCamMatrix = config.xyzToCamMatrix,
             colorMatrixSource = config.colorMatrixSource,
             colorMatrixOriginal = config.colorMatrixOriginal,
-            rawpyError = rawpyComputation.errorMessage,
         )
     }
 
@@ -210,12 +204,10 @@ class RawRoiProcessor(
         val balancedRgb: ChannelAverages,
         val whiteBalanceGains: DoubleArray,
         val xyz: DoubleArray,
-        val rawpy: RawpyResult?,
         val camToXyzMatrix: DoubleArray,
         val xyzToCamMatrix: DoubleArray?,
         val colorMatrixSource: String,
         val colorMatrixOriginal: DoubleArray,
-        val rawpyError: String?,
     )
 
     private fun enrichMetadataWithDng(
@@ -276,14 +268,14 @@ class RawRoiProcessor(
         } ?: throw IllegalArgumentException("normalizedRoi missing")
         val metadata = (args["metadata"] as? Map<*, *>)?.mapKeys { it.key.toString() }
             ?: throw IllegalArgumentException("metadata missing")
-        val dngPath = args["dngPath"] as? String
-        val workingMetadata = enrichMetadataWithDng(dngPath, metadata)
+        // DNG enrichment removed
+        val workingMetadata = metadata
 
         val jpegPath = args["jpegPath"] as? String
 
         val jpegOrientationDeg = readJpegOrientationDegrees(jpegPath)
-        val asShotNeutral = workingMetadata.toDoubleArray("asShotNeutral")
-            ?: metadata.toDoubleArray("asShotNeutral")
+        val asShotNeutral = workingMetadata.toDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL)
+            ?: metadata.toDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL)
         val rawPath = if (mode.includesRaw()) {
             args["rawBufferPath"] as? String
                 ?: throw IllegalArgumentException("rawBufferPath missing")
@@ -325,24 +317,12 @@ class RawRoiProcessor(
             "linearRgb" to rawResult?.balancedRgb?.toRgbList().orEmptyList(),
             "rawRgb" to rawResult?.cameraRgb?.toRgbList().orEmptyList(),
             "whiteBalanceGains" to rawResult?.whiteBalanceGains?.toList().orEmptyList(),
-            "rawpyXyz" to rawResult?.rawpy?.xyz.toListOrEmpty(),
-            "rawpySrgbLinear" to rawResult?.rawpy?.srgbLinear.toListOrEmpty(),
-            "rawpySrgb" to rawResult?.rawpy?.srgbGamma.toListOrEmpty(),
             "jpegSrgb" to jpegStats?.srgb?.toListOrEmpty(),
             "jpegLinearRgb" to jpegStats?.linear?.toListOrEmpty(),
             "jpegXyz" to jpegStats?.xyz?.toListOrEmpty(),
             "camToXyzMatrix" to rawResult?.camToXyzMatrix?.toList().orEmptyList(),
             "xyzToCamMatrix" to rawResult?.xyzToCamMatrix?.toList().orEmptyList(),
             "colorMatrixSource" to (rawResult?.colorMatrixSource ?: ""),
-            "colorMatrixOriginal" to rawResult?.colorMatrixOriginal?.toList().orEmptyList(),
-            "rawpyError" to rawResult?.rawpyError,
-            "colorCorrectionTransform" to workingMetadata.toDoubleArray("colorCorrectionTransform").toListOrEmpty(),
-            "colorMatrix1Full" to workingMetadata.toDoubleArray("colorMatrix1").toListOrEmpty(),
-            "colorMatrix2Full" to workingMetadata.toDoubleArray("colorMatrix2").toListOrEmpty(),
-            "sensorColorTransform1" to workingMetadata.toDoubleArray("sensorColorTransform1").toListOrEmpty(),
-            "sensorColorTransform2" to workingMetadata.toDoubleArray("sensorColorTransform2").toListOrEmpty(),
-            "forwardMatrix1" to workingMetadata.toDoubleArray("forwardMatrix1").toListOrEmpty(),
-            "forwardMatrix2" to workingMetadata.toDoubleArray("forwardMatrix2").toListOrEmpty(),
             "rawRect" to (rawRect?.toMap() ?: emptyMap<String, Any?>()),
         )
     }
@@ -580,55 +560,7 @@ class RawRoiProcessor(
         return multiply3(BRADFORD_INV, adapted)
     }
 
-    private data class RawpyResult(
-        val xyz: DoubleArray,
-        val srgbLinear: DoubleArray,
-        val srgbGamma: DoubleArray,
-    )
-
-    private data class RawpyComputation(
-        val result: RawpyResult?,
-        val errorMessage: String?,
-    )
-
-    private fun runRawpySandbox(
-        cameraRgb: ChannelAverages,
-        asShotNeutral: DoubleArray?,
-        metadata: Map<String, Any?>,
-    ): RawpyComputation {
-        val sample = RawpyColorPipelineSandbox.SampleInput(
-            cameraRgb = RawpyColorPipelineSandbox.ChannelSample(
-                red = cameraRgb.red,
-                greenR = cameraRgb.greenR,
-                greenB = cameraRgb.greenB,
-                blue = cameraRgb.blue,
-            ),
-            asShotNeutral = asShotNeutral,
-            colorMatrix1 = metadata.toDoubleArray("colorMatrix1")
-                ?.let { invert3x3(it) }
-                ?: metadata.toDoubleArray("sensorColorTransform1")?.let { invert3x3(it) },
-            colorMatrix2 = metadata.toDoubleArray("colorMatrix2")
-                ?.let { invert3x3(it) }
-                ?: metadata.toDoubleArray("sensorColorTransform2")?.let { invert3x3(it) },
-            referenceIlluminant1 = (metadata["referenceIlluminant1"] as? Number)
-                ?.toInt() ?: (metadata["sensorReferenceIlluminant1"] as? Number)?.toInt(),
-            referenceIlluminant2 = (metadata["referenceIlluminant2"] as? Number)
-                ?.toInt() ?: (metadata["sensorReferenceIlluminant2"] as? Number)?.toInt(),
-            forwardMatrix1 = metadata.toDoubleArray("forwardMatrix1")
-                ?: metadata.toDoubleArray("sensorForwardMatrix1"),
-            forwardMatrix2 = metadata.toDoubleArray("forwardMatrix2")
-                ?: metadata.toDoubleArray("sensorForwardMatrix2"),
-        )
-        val computation = runCatching {
-            RawpyColorPipelineSandbox.compute(sample)
-        }.map {
-            RawpyResult(it.xyz, it.srgbLinear, it.srgbGamma)
-        }
-        return RawpyComputation(
-            result = computation.getOrNull(),
-            errorMessage = computation.exceptionOrNull()?.message,
-        )
-    }
+    // rawpy sandbox pipeline removed
 
     private fun computeJpegStats(
         jpegPath: String?,
@@ -783,7 +715,7 @@ class RawRoiProcessor(
         metadata: Map<String, Any?>,
         transpose: Boolean,
     ): ColorTransform {
-        metadata.toDoubleArray("colorCorrectionTransform")?.let {
+        metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM)?.let {
             if (!isIdentity3x3(it)) {
                 val m = if (transpose) transpose3x3(it) else it
                 return ColorTransform(m, requiresInverse = false, source = if (transpose) "colorCorrectionTransform_T" else "colorCorrectionTransform")
@@ -794,7 +726,7 @@ class RawRoiProcessor(
         return ColorTransform(
             matrix = base,
             requiresInverse = false,
-            source = if (transpose) "rawpy_static_T" else "rawpy_static",
+            source = if (transpose) "default_static_T" else "default_static",
             inverseMatrix = inv,
         )
     }

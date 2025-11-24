@@ -43,8 +43,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   List<double>? _lastLinearRgb;
   List<double>? _lastRawRgb;
   List<double>? _lastWbGains;
-  List<double>? _lastRawpyXyz;
-  List<double>? _lastRawpySrgb;
   List<double>? _lastJpegSrgb;
   List<double>? _lastJpegLinearRgb;
   List<double>? _lastJpegXyz;
@@ -88,8 +86,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         _lastLinearRgb = null;
         _lastRawRgb = null;
         _lastWbGains = null;
-        _lastRawpyXyz = null;
-        _lastRawpySrgb = null;
         _lastJpegSrgb = null;
         _lastJpegLinearRgb = null;
         _lastJpegXyz = null;
@@ -228,23 +224,20 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         linearRgb: roiResult.linearRgb,
         xyz: roiResult.xyz,
         wbGains: roiResult.whiteBalanceGains,
-        rawpyXyz: roiResult.rawpyXyz,
-        rawpySrgb: roiResult.rawpySrgb,
         jpegSrgb: roiResult.jpegSrgb,
         jpegLinear: roiResult.jpegLinearRgb,
         jpegXyz: roiResult.jpegXyz,
         camToXyzMatrix: roiResult.camToXyzMatrix,
         xyzToCamMatrix: roiResult.xyzToCamMatrix,
         colorMatrixSource: roiResult.colorMatrixSource,
-        colorMatrixOriginal: roiResult.colorMatrixOriginal,
-        rawpyError: roiResult.rawpyError,
-        colorCorrectionTransform: roiResult.colorCorrectionTransform,
-        colorMatrix1: roiResult.colorMatrix1,
-        colorMatrix2: roiResult.colorMatrix2,
-        sensorColorTransform1: roiResult.sensorColorTransform1,
-        sensorColorTransform2: roiResult.sensorColorTransform2,
-        forwardMatrix1: roiResult.forwardMatrix1,
-        forwardMatrix2: roiResult.forwardMatrix2,
+        colorMatrixOriginal: const [],
+        colorCorrectionTransform: const [],
+        colorMatrix1: const [],
+        colorMatrix2: const [],
+        sensorColorTransform1: const [],
+        sensorColorTransform2: const [],
+        forwardMatrix1: const [],
+        forwardMatrix2: const [],
       );
       if (!mounted) return;
       setState(() {
@@ -257,12 +250,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
           _lastWbGains = roiResult.whiteBalanceGains.isEmpty
               ? null
               : roiResult.whiteBalanceGains;
-          _lastRawpyXyz = roiResult.rawpyXyz.isEmpty
-              ? null
-              : roiResult.rawpyXyz;
-          _lastRawpySrgb = roiResult.rawpySrgb.isEmpty
-              ? null
-              : roiResult.rawpySrgb;
           _lastJpegSrgb = null;
           _lastJpegLinearRgb = null;
           _lastJpegXyz = null;
@@ -278,8 +265,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
           _lastLinearRgb = null;
           _lastRawRgb = null;
           _lastWbGains = null;
-          _lastRawpyXyz = null;
-          _lastRawpySrgb = null;
         }
         _lastRawRect = Map<String, dynamic>.from(rawRectNums);
         if (!autoTriggered) {
@@ -318,7 +303,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       final file = File(p.join(dir.path, 'roi_dump_$ts.csv'));
       final buffer = StringBuffer()
         ..writeln(
-          'timestamp,roi_left,roi_top,roi_right,roi_bottom,raw_left,raw_top,raw_right,raw_bottom,raw_r,raw_g,raw_b,linear_r,linear_g,linear_b,xyz_x,xyz_y,xyz_z,wb_r_gain,wb_g_gain,wb_b_gain,rawpy_x,rawpy_y,rawpy_z,rawpy_srgb_r,rawpy_srgb_g,rawpy_srgb_b,jpeg_srgb_r,jpeg_srgb_g,jpeg_srgb_b,jpeg_linear_r,jpeg_linear_g,jpeg_linear_b,jpeg_xyz_x,jpeg_xyz_y,jpeg_xyz_z,cam_to_xyz_m00,cam_to_xyz_m01,cam_to_xyz_m02,cam_to_xyz_m10,cam_to_xyz_m11,cam_to_xyz_m12,cam_to_xyz_m20,cam_to_xyz_m21,cam_to_xyz_m22,xyz_to_cam_m00,xyz_to_cam_m01,xyz_to_cam_m02,xyz_to_cam_m10,xyz_to_cam_m11,xyz_to_cam_m12,xyz_to_cam_m20,xyz_to_cam_m21,xyz_to_cam_m22,color_matrix_source,color_matrix_raw_m00,color_matrix_raw_m01,color_matrix_raw_m02,color_matrix_raw_m10,color_matrix_raw_m11,color_matrix_raw_m12,color_matrix_raw_m20,color_matrix_raw_m21,color_matrix_raw_m22,rawpy_error,color_correction_m00,color_correction_m01,color_correction_m02,color_correction_m10,color_correction_m11,color_correction_m12,color_correction_m20,color_correction_m21,color_correction_m22,color_matrix1_m00,color_matrix1_m01,color_matrix1_m02,color_matrix1_m03,color_matrix1_m10,color_matrix1_m11,color_matrix1_m12,color_matrix1_m13,color_matrix1_m20,color_matrix1_m21,color_matrix1_m22,color_matrix1_m23,color_matrix2_m00,color_matrix2_m01,color_matrix2_m02,color_matrix2_m03,color_matrix2_m10,color_matrix2_m11,color_matrix2_m12,color_matrix2_m13,color_matrix2_m20,color_matrix2_m21,color_matrix2_m22,color_matrix2_m23,sensor_color_transform1_m00,sensor_color_transform1_m01,sensor_color_transform1_m02,sensor_color_transform1_m03,sensor_color_transform1_m10,sensor_color_transform1_m11,sensor_color_transform1_m12,sensor_color_transform1_m13,sensor_color_transform1_m20,sensor_color_transform1_m21,sensor_color_transform1_m22,sensor_color_transform1_m23,sensor_color_transform2_m00,sensor_color_transform2_m01,sensor_color_transform2_m02,sensor_color_transform2_m03,sensor_color_transform2_m10,sensor_color_transform2_m11,sensor_color_transform2_m12,sensor_color_transform2_m13,sensor_color_transform2_m20,sensor_color_transform2_m21,sensor_color_transform2_m22,sensor_color_transform2_m23,forward_matrix1_m00,forward_matrix1_m01,forward_matrix1_m02,forward_matrix1_m03,forward_matrix1_m10,forward_matrix1_m11,forward_matrix1_m12,forward_matrix1_m13,forward_matrix1_m20,forward_matrix1_m21,forward_matrix1_m22,forward_matrix1_m23,forward_matrix2_m00,forward_matrix2_m01,forward_matrix2_m02,forward_matrix2_m03,forward_matrix2_m10,forward_matrix2_m11,forward_matrix2_m12,forward_matrix2_m13,forward_matrix2_m20,forward_matrix2_m21,forward_matrix2_m22,forward_matrix2_m23',
+          'timestamp,roi_left,roi_top,roi_right,roi_bottom,raw_left,raw_top,raw_right,raw_bottom,raw_r,raw_g,raw_b,linear_r,linear_g,linear_b,xyz_x,xyz_y,xyz_z,wb_r_gain,wb_g_gain,wb_b_gain,jpeg_srgb_r,jpeg_srgb_g,jpeg_srgb_b,jpeg_linear_r,jpeg_linear_g,jpeg_linear_b,jpeg_xyz_x,jpeg_xyz_y,jpeg_xyz_z,cam_to_xyz_m00,cam_to_xyz_m01,cam_to_xyz_m02,cam_to_xyz_m10,cam_to_xyz_m11,cam_to_xyz_m12,cam_to_xyz_m20,cam_to_xyz_m21,cam_to_xyz_m22,xyz_to_cam_m00,xyz_to_cam_m01,xyz_to_cam_m02,xyz_to_cam_m10,xyz_to_cam_m11,xyz_to_cam_m12,xyz_to_cam_m20,xyz_to_cam_m21,xyz_to_cam_m22,color_matrix_source',
         );
       for (final entry in _roiLog) {
         buffer.writeln(entry.toCsvRow());
@@ -818,28 +803,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                             ]),
                           ),
                         ],
-                        if (_lastRawpyXyz != null) ...[
-                          const SizedBox(height: 8),
-                          _MetadataTile(
-                            title: 'Rawpy XYZ (0-1)',
-                            lines: [
-                              'X: ${_lastRawpyXyz![0].toStringAsFixed(4)}',
-                              'Y: ${_lastRawpyXyz![1].toStringAsFixed(4)}',
-                              'Z: ${_lastRawpyXyz![2].toStringAsFixed(4)}',
-                            ],
-                          ),
-                        ],
-                        if (_lastRawpySrgb != null) ...[
-                          const SizedBox(height: 8),
-                          _MetadataTile(
-                            title: 'Rawpy sRGB (gamma)',
-                            lines: _formatVector(_lastRawpySrgb, const [
-                              'R',
-                              'G',
-                              'B',
-                            ]),
-                          ),
-                        ],
+                        // rawpy sandbox outputs removed
                       ] else ...[
                         if (_lastJpegSrgb != null) ...[
                           _MetadataTile(
@@ -1166,8 +1130,6 @@ class _RoiDumpRecord {
     required this.linearRgb,
     required this.xyz,
     required this.wbGains,
-    required this.rawpyXyz,
-    required this.rawpySrgb,
     required this.jpegSrgb,
     required this.jpegLinear,
     required this.jpegXyz,
@@ -1175,7 +1137,6 @@ class _RoiDumpRecord {
     required this.xyzToCamMatrix,
     required this.colorMatrixSource,
     required this.colorMatrixOriginal,
-    required this.rawpyError,
     required this.colorCorrectionTransform,
     required this.colorMatrix1,
     required this.colorMatrix2,
@@ -1192,8 +1153,6 @@ class _RoiDumpRecord {
   final List<double> linearRgb;
   final List<double> xyz;
   final List<double> wbGains;
-  final List<double> rawpyXyz;
-  final List<double> rawpySrgb;
   final List<double> jpegSrgb;
   final List<double> jpegLinear;
   final List<double> jpegXyz;
@@ -1201,7 +1160,6 @@ class _RoiDumpRecord {
   final List<double> xyzToCamMatrix;
   final String colorMatrixSource;
   final List<double> colorMatrixOriginal;
-  final String rawpyError;
   final List<double> colorCorrectionTransform;
   final List<double> colorMatrix1;
   final List<double> colorMatrix2;
@@ -1233,12 +1191,6 @@ class _RoiDumpRecord {
       _valueOrEmpty(wbGains, 0),
       _valueOrEmpty(wbGains, 1),
       _valueOrEmpty(wbGains, 2),
-      _valueOrEmpty(rawpyXyz, 0),
-      _valueOrEmpty(rawpyXyz, 1),
-      _valueOrEmpty(rawpyXyz, 2),
-      _valueOrEmpty(rawpySrgb, 0),
-      _valueOrEmpty(rawpySrgb, 1),
-      _valueOrEmpty(rawpySrgb, 2),
       _valueOrEmpty(jpegSrgb, 0),
       _valueOrEmpty(jpegSrgb, 1),
       _valueOrEmpty(jpegSrgb, 2),
@@ -1252,15 +1204,6 @@ class _RoiDumpRecord {
     values.addAll(_matrixValues(camToXyzMatrix, expected: 9));
     values.addAll(_matrixValues(xyzToCamMatrix, expected: 9));
     values.add(colorMatrixSource);
-    values.addAll(_matrixValues(colorMatrixOriginal, expected: 9));
-    values.add(rawpyError);
-    values.addAll(_matrixValues(colorCorrectionTransform, expected: 9));
-    values.addAll(_matrixValues(colorMatrix1, expected: 12));
-    values.addAll(_matrixValues(colorMatrix2, expected: 12));
-    values.addAll(_matrixValues(sensorColorTransform1, expected: 12));
-    values.addAll(_matrixValues(sensorColorTransform2, expected: 12));
-    values.addAll(_matrixValues(forwardMatrix1, expected: 12));
-    values.addAll(_matrixValues(forwardMatrix2, expected: 12));
     return values.join(',');
   }
 
