@@ -344,7 +344,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
     try {
       final capture = _captureResult!;
       final roi = _normalizedRoi!;
-      final imgSize = _effectiveDisplaySize();\n      final patchRects = _makePatchRects(\n        roi,\n        _rows,\n        _cols,\n        _rotation,\n        _flipH,\n        _flipV,\n        _sampleBoxPx.toDouble(),\n        imgSize,\n      );
+      final imgSize = _effectiveDisplaySize();`n      final patchRects = _makePatchRects(`n        roi,`n        _rows,`n        _cols,`n        _rotation,`n        _flipH,`n        _flipV,`n        _sampleBoxPx.toDouble(),`n        imgSize,`n      );
       final linearRgbs = <List<double>>[];
       for (final rect in patchRects) {
         final res = await NativeCameraChannel.instance.processRoi(
@@ -389,9 +389,9 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
     await file.writeAsString(content);
   }
 
-  List<Rect> _makePatchRects(\n    Rect roi,\n    int rows,\n    int cols,\n    int rotationQuarter,\n    bool flipH,\n    bool flipV,\n    double sampleBoxPx,\n    Size imageSize,\n  ) {
+  List<Rect> _makePatchRects(`n    Rect roi,`n    int rows,`n    int cols,`n    int rotationQuarter,`n    bool flipH,`n    bool flipV,`n    double sampleBoxPx,`n    Size imageSize,`n  ) {
     final list = <Rect>[];
-    final cellW = (roi.right - roi.left) / cols;\n    final cellH = (roi.bottom - roi.top) / rows;\n    // Map the sampling box size (in pixels) to normalized coordinates on the image.\n    final sampleWn = (imageSize.width > 0) ? (sampleBoxPx / imageSize.width) : (cellW * 0.3);\n    final sampleHn = (imageSize.height > 0) ? (sampleBoxPx / imageSize.height) : (cellH * 0.3);\n    for (int r = 0; r < rows; r++) {
+    final cellW = (roi.right - roi.left) / cols;`n    final cellH = (roi.bottom - roi.top) / rows;`n    // Map the sampling box size (in pixels) to normalized coordinates on the image.`n    final sampleWn = (imageSize.width > 0) ? (sampleBoxPx / imageSize.width) : (cellW * 0.3);`n    final sampleHn = (imageSize.height > 0) ? (sampleBoxPx / imageSize.height) : (cellH * 0.3);`n    for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
         final mapped = _mapIndex(r, c, rows, cols, rotationQuarter, flipH, flipV);
         final rr = mapped.$1;
@@ -402,7 +402,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
         final bottom = top + cellH;
         final cx = (left + right) / 2;
         final cy = (top + bottom) / 2;
-        final w2 = math.min(cellW, sampleWn) / 2;\n        final h2 = math.min(cellH, sampleHn) / 2;
+        final w2 = math.min(cellW, sampleWn) / 2;`n        final h2 = math.min(cellH, sampleHn) / 2;
         list.add(Rect.fromLTRB(cx - w2, cy - h2, cx + w2, cy + h2));
       }
     }
@@ -604,7 +604,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Rotate 90¡ã',
+                  tooltip: 'Rotate 90ï¿½ï¿½',
                   onPressed: () => setState(() => _rotation = (_rotation + 1) % 4),
                   icon: const Icon(Icons.rotate_90_degrees_ccw),
                 ),
@@ -660,7 +660,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
             onPanUpdate: (d) => _updateRoi(d.localPosition, constraints),
             onPanEnd: (_) => _endRoi(),
             child: CustomPaint(
-              painter: _PreviewPainter(\n                image: img,\n                roi: _normalizedRoi != null ? _imageRectToDisplayRect(_normalizedRoi!, constraints) : null,\n                rows: _rows,\n                cols: _cols,\n                sampleBoxPx: _sampleBoxPx.toDouble(),\n              ),
+              painter: _PreviewPainter(`n                image: img,`n                roi: _normalizedRoi != null ? _imageRectToDisplayRect(_normalizedRoi!, constraints) : null,`n                rows: _rows,`n                cols: _cols,`n                sampleBoxPx: _sampleBoxPx.toDouble(),`n              ),
             ),
           ),
         );
@@ -669,12 +669,12 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
   }
 }
 
-class _PreviewPainter extends CustomPainter {\n  _PreviewPainter({\n    required this.image,\n    required this.roi,\n    required this.rows,\n    required this.cols,\n    required this.sampleBoxPx,\n  });
+class _PreviewPainter extends CustomPainter {`n  _PreviewPainter({`n    required this.image,`n    required this.roi,`n    required this.rows,`n    required this.cols,`n    required this.sampleBoxPx,`n  });
 
   final ui.Image image;
   final Rect? roi;
   final int rows;
-  final int cols;\n  final double sampleBoxPx;
+  final int cols;`n  final double sampleBoxPx;
 
   @override
   void paint(Canvas canvas, Size size) {
