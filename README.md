@@ -47,10 +47,11 @@ Entry: `lib/screens/camera_capture_screen.dart`.
 - Planned UI improvements and the ROI tooling are documented in `CAMERA_ROI_UI_PLAN.md`.
 - Uses Android Camera2 via a `MethodChannel` bridge.
 - Captures JPEG + RAW buffers; user draws an ROI on the preview.
-- Native processor applies black/white level, white balance, and a 3x3 CCM to convert RAW ROI to XYZ.
+- RAW pipeline: average ROI over RAW16 (black-level subtract, white-level normalize), apply per-capture WB, then a 3x3 CCM (from `COLOR_CORRECTION_TRANSFORM` or a default static matrix) to XYZ.
+- JPEG pipeline: crop ROI from JPEG, average sRGB → inverse gamma → linear → sRGB→XYZ.
 - Flutter converts XYZ to Lab/sCAM (via `colordesign_tool_core`) and constructs a `ColorStimulus`.
 - With a configurable Delta E threshold, either replaces the closest slot or pushes to the next empty slot. Palette is persisted after updates.
-- Planned UI improvements and the ROI tooling are documented in `CAMERA_ROI_UI_PLAN.md`.
+- Metadata keys used by the native layer are centralized in `android/app/src/main/kotlin/com/example/color_design_tool/camera/MetadataKeys.kt`.
 
 ### 4) Display Calibration Helper
 Entry: `lib/screens/display_calibration_screen.dart`.
