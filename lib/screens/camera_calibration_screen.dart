@@ -22,6 +22,9 @@ class CameraCalibrationScreen extends StatefulWidget {
 }
 
 class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
+  // Size (in preview image pixels) of the center sampling box for each patch.
+  // Only pixels inside this box are averaged per patch.
+  int _sampleBoxPx = 16;
   ChartTemplate _template = ChartTemplate.pmcc5x6;
   int _rows = 5;
   int _cols = 6;
@@ -341,7 +344,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
     try {
       final capture = _captureResult!;
       final roi = _normalizedRoi!;
-      final patchRects = _makePatchRects(roi, _rows, _cols, _rotation, _flipH, _flipV);
+      final imgSize = _effectiveDisplaySize();\n      final patchRects = _makePatchRects(\n        roi,\n        _rows,\n        _cols,\n        _rotation,\n        _flipH,\n        _flipV,\n        _sampleBoxPx.toDouble(),\n        imgSize,\n      );
       final linearRgbs = <List<double>>[];
       for (final rect in patchRects) {
         final res = await NativeCameraChannel.instance.processRoi(
@@ -386,20 +389,9 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
     await file.writeAsString(content);
   }
 
-  List<Rect> _makePatchRects(
-    Rect roi,
-    int rows,
-    int cols,
-    int rotationQuarter,
-    bool flipH,
-    bool flipV,
-  ) {
+  List<Rect> _makePatchRects(\n    Rect roi,\n    int rows,\n    int cols,\n    int rotationQuarter,\n    bool flipH,\n    bool flipV,\n    double sampleBoxPx,\n    Size imageSize,\n  ) {
     final list = <Rect>[];
-    final cellW = (roi.right - roi.left) / cols;
-    final cellH = (roi.bottom - roi.top) / rows;
-    // shrink factor to sample center region
-    const shrink = 0.6; // keep 60% of cell width/height
-    for (int r = 0; r < rows; r++) {
+    final cellW = (roi.right - roi.left) / cols;\n    final cellH = (roi.bottom - roi.top) / rows;\n    // Map the sampling box size (in pixels) to normalized coordinates on the image.\n    final sampleWn = (imageSize.width > 0) ? (sampleBoxPx / imageSize.width) : (cellW * 0.3);\n    final sampleHn = (imageSize.height > 0) ? (sampleBoxPx / imageSize.height) : (cellH * 0.3);\n    for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
         final mapped = _mapIndex(r, c, rows, cols, rotationQuarter, flipH, flipV);
         final rr = mapped.$1;
@@ -410,8 +402,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
         final bottom = top + cellH;
         final cx = (left + right) / 2;
         final cy = (top + bottom) / 2;
-        final w2 = cellW * shrink / 2;
-        final h2 = cellH * shrink / 2;
+        final w2 = math.min(cellW, sampleWn) / 2;\n        final h2 = math.min(cellH, sampleHn) / 2;
         list.add(Rect.fromLTRB(cx - w2, cy - h2, cx + w2, cy + h2));
       }
     }
@@ -669,12 +660,7 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
             onPanUpdate: (d) => _updateRoi(d.localPosition, constraints),
             onPanEnd: (_) => _endRoi(),
             child: CustomPaint(
-              painter: _PreviewPainter(
-                image: img,
-                roi: _normalizedRoi != null ? _imageRectToDisplayRect(_normalizedRoi!, constraints) : null,
-                rows: _rows,
-                cols: _cols,
-              ),
+              painter: _PreviewPainter(\n                image: img,\n                roi: _normalizedRoi != null ? _imageRectToDisplayRect(_normalizedRoi!, constraints) : null,\n                rows: _rows,\n                cols: _cols,\n                sampleBoxPx: _sampleBoxPx.toDouble(),\n              ),
             ),
           ),
         );
@@ -683,18 +669,12 @@ class _CameraCalibrationScreenState extends State<CameraCalibrationScreen> {
   }
 }
 
-class _PreviewPainter extends CustomPainter {
-  _PreviewPainter({
-    required this.image,
-    required this.roi,
-    required this.rows,
-    required this.cols,
-  });
+class _PreviewPainter extends CustomPainter {\n  _PreviewPainter({\n    required this.image,\n    required this.roi,\n    required this.rows,\n    required this.cols,\n    required this.sampleBoxPx,\n  });
 
   final ui.Image image;
   final Rect? roi;
   final int rows;
-  final int cols;
+  final int cols;\n  final double sampleBoxPx;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -724,11 +704,7 @@ class _PreviewPainter extends CustomPainter {
       }
       for (int rr = 1; rr < rows; rr++) {
         final y = r.top + rr * cellH;
-        canvas.drawLine(Offset(r.left, y), Offset(r.right, y), gridPaint);
-      }
-    }
-  }
-
+        canvas.drawLine(Offset(r.left, y), Offset(r.right, y), gridPaint);\n        }\n\n        // draw center sampling boxes in each cell\n        final samplePaint = Paint()\n          ..style = PaintingStyle.stroke\n          ..strokeWidth = 1\n          ..color = Colors.amberAccent;\n        final halfEdgeLimit = 0.5 * 0.9; // 90% of half min(cellW, cellH) as upper bound\n        final edge = math.min(sampleBoxPx, 0.9 * math.min(cellW, cellH));\n        final w2 = edge / 2;\n        final h2 = edge / 2;\n        for (int rr = 0; rr < rows; rr++) {\n          for (int cc = 0; cc < cols; cc++) {\n            final left = r.left + cc * cellW;\n            final top = r.top + rr * cellH;\n            final right = left + cellW;\n            final bottom = top + cellH;\n            final cx = (left + right) / 2;\n            final cy = (top + bottom) / 2;\n            final rect = Rect.fromLTRB(cx - w2, cy - h2, cx + w2, cy + h2);\n            canvas.drawRect(rect, samplePaint);\n          }\n        }\n      }\n    }\n\n    Rect _letterboxDst(Size box, double iw, double ih) {
   Rect _letterboxDst(Size box, double iw, double ih) {
     final scale = math.max(box.width / iw, box.height / ih);
     final sw = iw * scale;
@@ -746,5 +722,15 @@ class _PreviewPainter extends CustomPainter {
         oldDelegate.cols != cols;
   }
 }
+
+
+
+
+
+
+
+
+
+
 
 
