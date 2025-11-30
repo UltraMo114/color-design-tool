@@ -545,31 +545,35 @@ class NativeCameraCaptureActivity : AppCompatActivity() {
         chars?.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("colorMatrix1", matrix)
-            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM_1, matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM1, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("colorMatrix2", matrix)
-            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM_2, matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_COLOR_TRANSFORM2, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("forwardMatrix1", matrix)
-            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX_1, matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX1, matrix)
         }
         chars?.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let {
             val matrix = it.toDoubleArray()
             bundle.putDoubleArray("forwardMatrix2", matrix)
-            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX_2, matrix)
+            bundle.putDoubleArray(MetadataKeys.SENSOR_FORWARD_MATRIX2, matrix)
         }
-        chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.let {
-            bundle.putInt("referenceIlluminant1", it.toInt())
-            bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT_1, it.toInt())
+        chars?.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)?.let {
+            bundle.putDoubleArray(MetadataKeys.SENSOR_CALIBRATION_TRANSFORM1, it.toDoubleArray())
         }
-        chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.let {
-            bundle.putInt("referenceIlluminant2", it.toInt())
-            bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT_2, it.toInt())
+        chars?.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)?.let {
+            bundle.putDoubleArray(MetadataKeys.SENSOR_CALIBRATION_TRANSFORM2, it.toDoubleArray())
         }
+        val referenceIlluminant1 = chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)?.toInt() ?: 17
+        val referenceIlluminant2 = chars?.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 21
+        bundle.putInt("referenceIlluminant1", referenceIlluminant1)
+        bundle.putInt("referenceIlluminant2", referenceIlluminant2)
+        bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT1, referenceIlluminant1)
+        bundle.putInt(MetadataKeys.SENSOR_REFERENCE_ILLUMINANT2, referenceIlluminant2)
         val capture = synchronized(captureLock) { currentCapture }
         capture.rowStride?.let { bundle.putInt(MetadataKeys.ROW_STRIDE, it) }
         capture.pixelStride?.let { bundle.putInt(MetadataKeys.PIXEL_STRIDE, it) }

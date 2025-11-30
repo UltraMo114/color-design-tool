@@ -206,6 +206,12 @@ class PaletteProvider extends ChangeNotifier {
     await saveStimuliToQtx(path, stimuli);
     return path;
   }
+
+  @override
+  void dispose() {
+    PaletteStorage.instance.dispose();
+    super.dispose();
+  }
 }
 
 class PaletteMatch {

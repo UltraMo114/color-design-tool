@@ -333,12 +333,24 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   }
 
   Future<Directory> _getDumpDirectory() async {
-    final external = await getExternalStorageDirectories(
-      type: StorageDirectory.documents,
-    );
-    final baseDir = (external != null && external.isNotEmpty)
-        ? external.first
-        : await getApplicationDocumentsDirectory();
+    Directory? baseDir;
+    if (Platform.isAndroid) {
+      try {
+        final external = await getExternalStorageDirectories(
+          type: StorageDirectory.documents,
+        );
+        if (external != null && external.isNotEmpty) {
+          baseDir = external.first;
+        }
+      } on UnsupportedError catch (e) {
+        debugPrint('External storage unavailable: $e');
+      } on MissingPluginException catch (e) {
+        debugPrint('Path provider plugin missing: $e');
+      } on PlatformException catch (e) {
+        debugPrint('Failed to query external storage: ${e.message}');
+      }
+    }
+    baseDir ??= await getApplicationDocumentsDirectory();
     final target = Directory(p.join(baseDir.path, 'roi_exports'));
     if (!await target.exists()) {
       await target.create(recursive: true);

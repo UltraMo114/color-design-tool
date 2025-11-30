@@ -44,11 +44,12 @@ object MetadataKeys {
     const val AS_SHOT_NEUTRAL = "asShotNeutral"       // [r, g, b] reciprocal gains
 
     // Static camera matrices (from CameraCharacteristics) exposed for debugging/logging
-    const val SENSOR_COLOR_TRANSFORM_1 = "sensorColorTransform1"     // 3x4 or 3x3
-    const val SENSOR_COLOR_TRANSFORM_2 = "sensorColorTransform2"
-    const val SENSOR_FORWARD_MATRIX_1 = "sensorForwardMatrix1"       // 3x3
-    const val SENSOR_FORWARD_MATRIX_2 = "sensorForwardMatrix2"
-    const val SENSOR_REFERENCE_ILLUMINANT_1 = "sensorReferenceIlluminant1"
-    const val SENSOR_REFERENCE_ILLUMINANT_2 = "sensorReferenceIlluminant2"
+    const val SENSOR_FORWARD_MATRIX1 = "sensorForwardMatrix1"       // FloatArray (3x3)
+    const val SENSOR_FORWARD_MATRIX2 = "sensorForwardMatrix2"       // FloatArray (3x3)
+    const val SENSOR_COLOR_TRANSFORM1 = "sensorColorTransform1"     // FloatArray (3x3) - fallback
+    const val SENSOR_COLOR_TRANSFORM2 = "sensorColorTransform2"     // FloatArray (3x3) - fallback
+    const val SENSOR_REFERENCE_ILLUMINANT1 = "sensorReferenceIlluminant1" // Int (e.g., 17 for StdA)
+    const val SENSOR_REFERENCE_ILLUMINANT2 = "sensorReferenceIlluminant2" // Int (e.g., 21 for D65)
+    const val SENSOR_CALIBRATION_TRANSFORM1 = "sensorCalibrationTransform1" // FloatArray (3x3) - Optional
+    const val SENSOR_CALIBRATION_TRANSFORM2 = "sensorCalibrationTransform2" // FloatArray (3x3) - Optional
 }
-

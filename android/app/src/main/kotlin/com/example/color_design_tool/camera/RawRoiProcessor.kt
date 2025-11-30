@@ -174,19 +174,24 @@ class RawRoiProcessor(
             )
         }
         val workingRgb = if (config.skipWhiteBalance) cameraRgb else applyWhiteBalance(cameraRgb, whiteBalanceGains)
-        // val fallbackXyz = adaptToD65(multiplyColorMatrix(config.camToXyzMatrix, workingRgb), D50_WHITE, D65_WHITE)
-        val fallbackXyz = multiplyColorMatrix(config.camToXyzMatrix, workingRgb)
-        val xyz = fallbackXyz
+        val interpolatedMatrix = calculateInterpolatedMatrix(
+            metadata = metadata,
+            colorCorrectionGains = config.colorCorrectionGains,
+            fallbackMatrix = config.camToXyzMatrix,
+            fallbackSource = config.colorMatrixSource,
+        )
+        val xyz = multiplyColorMatrix(interpolatedMatrix.matrix, workingRgb)
+        val xyzToCam = invert3x3(interpolatedMatrix.matrix) ?: config.xyzToCamMatrix
         val clamped = DoubleArray(xyz.size) { index -> max(0.0, xyz[index]) }
         return RawPipelineResult(
             cameraRgb = cameraRgb,
             balancedRgb = workingRgb,
             whiteBalanceGains = whiteBalanceGains,
             xyz = clamped,
-            camToXyzMatrix = config.camToXyzMatrix,
-            xyzToCamMatrix = config.xyzToCamMatrix,
-            colorMatrixSource = config.colorMatrixSource,
-            colorMatrixOriginal = config.colorMatrixOriginal,
+            camToXyzMatrix = interpolatedMatrix.matrix,
+            xyzToCamMatrix = xyzToCam,
+            colorMatrixSource = interpolatedMatrix.source,
+            colorMatrixOriginal = interpolatedMatrix.matrix.copyOf(),
         )
     }
 
@@ -216,6 +221,11 @@ class RawRoiProcessor(
         val xyzToCamMatrix: DoubleArray?,
         val colorMatrixSource: String,
         val colorMatrixOriginal: DoubleArray,
+    )
+
+    private data class MatrixComputationResult(
+        val matrix: DoubleArray,
+        val source: String,
     )
 
     private fun enrichMetadataWithDng(
@@ -513,6 +523,100 @@ class RawRoiProcessor(
         return doubleArrayOf(x, y, z)
     }
 
+    private fun calculateInterpolatedMatrix(
+        metadata: Map<String, Any?>,
+        colorCorrectionGains: DoubleArray?,
+        fallbackMatrix: DoubleArray,
+        fallbackSource: String,
+    ): MatrixComputationResult {
+        val forward1 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX1, "forwardMatrix1")
+        val forward2 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX2, "forwardMatrix2")
+        if (forward1 != null && forward2 != null) {
+            val weight = computeDualIlluminantWeight(metadata, colorCorrectionGains)
+            val matrix = interpolateMatrices(forward1, forward2, weight)
+            return MatrixComputationResult(matrix, "forwardMatrix_interpolated")
+        }
+        if (forward1 != null) {
+            return MatrixComputationResult(forward1, "forwardMatrix1")
+        }
+        if (forward2 != null) {
+            return MatrixComputationResult(forward2, "forwardMatrix2")
+        }
+
+        val inverseColor1 = metadata.matrixForKey(MetadataKeys.SENSOR_COLOR_TRANSFORM1, "colorMatrix1")?.let { invert3x3(it) }
+        val inverseColor2 = metadata.matrixForKey(MetadataKeys.SENSOR_COLOR_TRANSFORM2, "colorMatrix2")?.let { invert3x3(it) }
+        if (inverseColor1 != null && inverseColor2 != null) {
+            val weight = computeDualIlluminantWeight(metadata, colorCorrectionGains)
+            val matrix = interpolateMatrices(inverseColor1, inverseColor2, weight)
+            return MatrixComputationResult(matrix, "colorTransform_inverse_interpolated")
+        }
+        if (inverseColor1 != null) {
+            return MatrixComputationResult(inverseColor1, "colorTransform1_inverse")
+        }
+        if (inverseColor2 != null) {
+            return MatrixComputationResult(inverseColor2, "colorTransform2_inverse")
+        }
+
+        metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM)?.copy3x3()?.let {
+            return MatrixComputationResult(it, "colorCorrectionTransform")
+        }
+
+        return MatrixComputationResult(fallbackMatrix.copy3x3() ?: fallbackMatrix, fallbackSource)
+    }
+
+    private fun computeDualIlluminantWeight(
+        metadata: Map<String, Any?>,
+        colorCorrectionGains: DoubleArray?,
+    ): Double {
+        val ratioA = lookupIlluminantRatio(metadata[MetadataKeys.SENSOR_REFERENCE_ILLUMINANT1].toIntOrDefault(17))
+        val ratioD65 = lookupIlluminantRatio(metadata[MetadataKeys.SENSOR_REFERENCE_ILLUMINANT2].toIntOrDefault(21))
+        val currentRatio = colorCorrectionGains?.let { gains ->
+            val red = gains.getOrNull(0)
+            val blue = gains.getOrNull(3)
+            if (red == null || blue == null || abs(blue) < 1e-9) {
+                null
+            } else {
+                red / blue
+            }
+        } ?: 1.0
+        if (abs(ratioA - ratioD65) < 1e-6) {
+            return 0.5
+        }
+        if (currentRatio >= ratioA) return 0.0
+        if (currentRatio <= ratioD65) return 1.0
+        val denominator = ratioA - ratioD65
+        if (abs(denominator) < 1e-9) return 0.5
+        val weight = (ratioA - currentRatio) / denominator
+        return weight.coerceIn(0.0, 1.0)
+    }
+
+    private fun lookupIlluminantRatio(illuminant: Int): Double {
+        return when (illuminant) {
+            1 -> 0.65    // Daylight
+            2 -> 0.8     // Fluorescent
+            3 -> 1.4     // Tungsten
+            4 -> 0.6     // Flash
+            17 -> 1.5    // StdA
+            18 -> 1.35   // StdB
+            19 -> 1.0    // D50
+            20 -> 0.75   // D55
+            21 -> 0.5    // D65
+            22 -> 0.4    // D75
+            else -> 1.0
+        }
+    }
+
+    private fun interpolateMatrices(matrix1: DoubleArray, matrix2: DoubleArray, weight: Double): DoubleArray {
+        val clampedWeight = weight.coerceIn(0.0, 1.0)
+        val result = DoubleArray(9)
+        for (index in 0 until 9) {
+            val a = matrix1.getOrNull(index) ?: 0.0
+            val b = matrix2.getOrNull(index) ?: 0.0
+            result[index] = (1.0 - clampedWeight) * a + clampedWeight * b
+        }
+        return result
+    }
+
     private fun invert3x3(matrix: DoubleArray): DoubleArray? {
         if (matrix.size < 9) return null
         val a = matrix[0]
@@ -691,6 +795,20 @@ class RawRoiProcessor(
             is List<*> -> value.mapNotNull { (it as? Number)?.toDouble() }.toDoubleArray()
             else -> null
         }
+    }
+
+    private fun Map<String, Any?>.matrixForKey(key: String, vararg fallbacks: String): DoubleArray? {
+        val keys = arrayOf(key, *fallbacks)
+        for (candidate in keys) {
+            val matrix = this.toDoubleArray(candidate)?.copy3x3()
+            if (matrix != null) return matrix
+        }
+        return null
+    }
+
+    private fun DoubleArray.copy3x3(): DoubleArray? {
+        if (this.size < 9) return null
+        return this.copyOf(9)
     }
 
     private fun extractWhiteBalanceGains(

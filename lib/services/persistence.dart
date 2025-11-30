@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
 
@@ -9,18 +11,52 @@ class PaletteStorage {
   static const String _key = 'palette_v1';
 
   Box? _box;
+  bool _hiveInitialized = false;
+  final bool _useInMemoryStore =
+      Platform.environment.containsKey('FLUTTER_TEST');
+  List<Map<String, dynamic>> _memoryEntries = [];
 
   Future<void> init() async {
+    if (_useInMemoryStore) {
+      return;
+    }
     if (_box != null) return;
-    await Hive.initFlutter();
+    if (!_hiveInitialized) {
+      await Hive.initFlutter();
+      _hiveInitialized = true;
+    }
     _box = await Hive.openBox(_boxName);
   }
 
+  Future<void> dispose() async {
+    if (_useInMemoryStore) {
+      _memoryEntries = [];
+      return;
+    }
+    if (_box != null) {
+      await _box!.close();
+      _box = null;
+    }
+    if (_hiveInitialized) {
+      await Hive.close();
+    }
+  }
+
   Future<void> save(List<Map<String, dynamic>> entries) async {
+    if (_useInMemoryStore) {
+      _memoryEntries =
+          entries.map((e) => Map<String, dynamic>.from(e)).toList(growable: false);
+      return;
+    }
     await _box?.put(_key, entries);
   }
 
   List<Map<String, dynamic>> loadRaw() {
+    if (_useInMemoryStore) {
+      return _memoryEntries
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    }
     final data = _box?.get(_key);
     if (data is List) {
       return data.cast<Map>().map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -112,4 +148,3 @@ ColorStimulus mapToStimulus(Map<String, dynamic> m) {
     metadata: Map<String, dynamic>.from(m['metadata'] as Map),
   );
 }
-
