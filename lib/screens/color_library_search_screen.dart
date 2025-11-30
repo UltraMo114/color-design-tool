@@ -25,6 +25,10 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
   bool _loading = true;
   String? _error;
   List<ColorLibraryMatch> _matches = const [];
+  List<ColorLibraryMatch> _allMatches = const [];
+  List<ColorLibrarySource> _sources = const [];
+  static const String _allSourcesKey = '__all__';
+  String? _selectedLibraryId;
 
   @override
   void initState() {
@@ -40,13 +44,21 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
     try {
       final service = context.read<ColorLibraryService>();
       await service.ensureLoaded();
+      final enabledSources =
+          service.sources.where((s) => s.enabled).toList(growable: false);
       final matches = service.findMatches(
         target: widget.target,
         threshold: _threshold,
       );
       if (!mounted) return;
       setState(() {
-        _matches = matches;
+        _sources = enabledSources;
+        if (_selectedLibraryId != null &&
+            !_sources.any((s) => s.id == _selectedLibraryId)) {
+          _selectedLibraryId = null;
+        }
+        _allMatches = matches;
+        _matches = _filterMatches(_selectedLibraryId);
         _loading = false;
       });
     } catch (e) {
@@ -150,6 +162,41 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
               ],
             ),
           ),
+          if (_sources.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  const Text('Source'),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButton<String>(
+                      isExpanded: true,
+                      value: _selectedLibraryId ?? _allSourcesKey,
+                      items: [
+                        DropdownMenuItem<String>(
+                          value: _allSourcesKey,
+                          child: const Text('All databases'),
+                        ),
+                        ..._sources.map(
+                          (s) => DropdownMenuItem<String>(
+                            value: s.id,
+                            child: Text(s.id),
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedLibraryId =
+                              value == _allSourcesKey ? null : value;
+                          _matches = _filterMatches(_selectedLibraryId);
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 8),
           Expanded(
             child: _buildBody(theme),
@@ -229,5 +276,14 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemCount: _matches.length,
     );
+  }
+
+  List<ColorLibraryMatch> _filterMatches(String? libraryId) {
+    if (libraryId == null) {
+      return List<ColorLibraryMatch>.from(_allMatches);
+    }
+    return _allMatches
+        .where((m) => m.libraryId == libraryId)
+        .toList(growable: false);
   }
 }

@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vector_math/vector_math.dart' show Vector3;
 
+import 'package:colordesign_tool_core/src/common/util.dart' show labToXyz;
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
 import '../providers/palette_provider.dart';
 import '../providers/display_profile_provider.dart';
@@ -15,16 +17,34 @@ class ProductDesignScreen extends StatefulWidget {
 }
 
 class _ProductDesignScreenState extends State<ProductDesignScreen> {
+  static const List<double> _defaultReferenceWhite = [95.047, 100.0, 108.883];
+  static const int _defaultObserverAngle = 2;
+  static const double _defaultAdaptingLuminance = 64.0;
+  static const double _defaultBackgroundLuminance = 20.0;
+  static const String _defaultSurround = 'avg';
+
   int _slots = 2; // 1..4
   String _pattern = 'square'; // square | circle | triangle
   double _scale = 0.15; // total content area ratio
   int? _selected; // -1 background, 0..3 slots
 
   ColorStimulus? _background;
+  double _backgroundLightness = 50;
   final List<ColorStimulus?> _stimuli = List<ColorStimulus?>.filled(4, null);
 
   // Metrics (simple approximations until exact algorithm is ported)
   double? _wc, _hl, _ap, _ch;
+
+  @override
+  void initState() {
+    super.initState();
+    _background = _stimulusFromLab(
+      l: _backgroundLightness,
+      a: 0,
+      b: 0,
+      sourceLabel: 'Background',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -119,15 +139,21 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
                       ColorStimulus? chosen = pp.focusedStimulus;
                       chosen ??= await _pickFromBuffer(context);
                       if (chosen == null) return;
+                      final picked = chosen;
                       setState(() {
                         if (_selected == -1) {
-                          _background = chosen;
+                          _background = picked;
+                          final lab = picked.appearance?.lab_value;
+                          if (lab != null && lab.length >= 3) {
+                            _backgroundLightness =
+                                lab[0].clamp(0.0, 100.0).toDouble();
+                          }
                         } else if (_selected != null) {
-                          _stimuli[_selected!] = chosen;
+                          _stimuli[_selected!] = picked;
                         }
                         _recalcMetrics();
                       });
-                    },
+                  },
               child: const Text('Transform'),
             ),
           ],
@@ -170,18 +196,15 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
       final side = math.min(sideByArea, math.min(cellW, cellH));
 
       final bgColor = _background == null
-          ? Colors.grey.shade200
+          ? Colors.grey.shade400
           : profile.colorForStimulus(_background!);
 
       return GestureDetector(
         onTap: () async {
-          final chosen = await _pickFromBuffer(context);
-          if (chosen == null) return;
           setState(() {
-            _background = chosen;
             _selected = -1;
-            _recalcMetrics();
           });
+          await _showBackgroundLightnessSheet();
         },
         child: Container(
           color: bgColor,
@@ -204,13 +227,10 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
                   return GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () async {
-                      final chosen = await _pickFromBuffer(context);
-                      if (chosen == null) return;
                       setState(() {
-                        _stimuli[i] = chosen;
                         _selected = i;
-                        _recalcMetrics();
                       });
+                      await _showForegroundEditor(i);
                     },
                     child: Container(
                       width: side,
@@ -311,6 +331,286 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
         const SizedBox(width: 8),
         control,
       ],
+    );
+  }
+
+  List<double> _labValuesOrDefault(
+    ColorStimulus? stimulus, {
+    double fallbackL = 50,
+    double fallbackA = 0,
+    double fallbackB = 0,
+  }) {
+    final lab = stimulus?.appearance?.lab_value;
+    if (lab == null || lab.length < 3) {
+      return [fallbackL, fallbackA, fallbackB];
+    }
+    return [lab[0], lab[1], lab[2]];
+  }
+
+  ColorStimulus _stimulusFromLab({
+    required double l,
+    required double a,
+    required double b,
+    ColorStimulus? template,
+    String sourceLabel = 'Custom',
+  }) {
+    final referenceWhite = template == null
+        ? List<double>.from(_defaultReferenceWhite)
+        : List<double>.from(template.scientific_core.reference_white_xyz);
+    final xyzVec =
+        labToXyz(Vector3(l, a, b), Vector3(referenceWhite[0], referenceWhite[1], referenceWhite[2]));
+    final sci = ScientificData(
+      xyz_value: [xyzVec.x, xyzVec.y, xyzVec.z],
+      observer_angle:
+          template?.scientific_core.observer_angle ?? _defaultObserverAngle,
+      reference_white_xyz: referenceWhite,
+      adapting_luminance_La:
+          template?.scientific_core.adapting_luminance_La ?? _defaultAdaptingLuminance,
+      background_luminance_Yb:
+          template?.scientific_core.background_luminance_Yb ?? _defaultBackgroundLuminance,
+      surround_condition:
+          template?.scientific_core.surround_condition ?? _defaultSurround,
+    );
+    final chroma = math.sqrt(a * a + b * b);
+    var hue = math.atan2(b, a) * 180 / math.pi;
+    if (hue.isNaN) {
+      hue = 0;
+    } else if (hue < 0) {
+      hue += 360;
+    }
+    final appearance = AppearanceData(
+      lab_value: [l, a, b],
+      JCh: [l, chroma, hue],
+      NCS_name: template?.appearance?.NCS_name ?? 'Custom',
+      depth_description: template?.appearance?.depth_description ?? 'Custom',
+      classification: template?.appearance?.classification ?? 'Custom',
+    );
+    final metadata =
+        Map<String, dynamic>.from(template?.metadata ?? const <String, dynamic>{});
+    final source = template?.source ??
+        SourceInfo(
+          type: 'MANUAL',
+          origin_identifier: sourceLabel,
+          s_name: null,
+        );
+    return ColorStimulus(
+      source: source,
+      scientific_core: sci,
+      appearance: appearance,
+      metadata: metadata,
+    );
+  }
+
+  void _updateBackgroundLightness(double lightness) {
+    final currentLab = _labValuesOrDefault(
+      _background,
+      fallbackL: lightness,
+      fallbackA: 0,
+      fallbackB: 0,
+    );
+    final updated = _stimulusFromLab(
+      l: lightness,
+      a: currentLab[1],
+      b: currentLab[2],
+      template: _background,
+      sourceLabel: 'Background',
+    );
+    setState(() {
+      _backgroundLightness = lightness;
+      _background = updated;
+      _recalcMetrics();
+    });
+  }
+
+  Future<void> _showBackgroundLightnessSheet() async {
+    double sliderValue =
+        (_background?.appearance?.lab_value[0] ?? _backgroundLightness)
+            .clamp(0.0, 100.0)
+            .toDouble();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, sheetSetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Background Lightness',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                    Slider(
+                      min: 0,
+                      max: 100,
+                      value: sliderValue,
+                      onChanged: (value) {
+                        sheetSetState(() => sliderValue = value);
+                        _updateBackgroundLightness(value);
+                      },
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text('L* ${sliderValue.toStringAsFixed(1)}'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showForegroundEditor(int index) async {
+    final rootContext = context;
+    final lab = _labValuesOrDefault(_stimuli[index]);
+    double l = lab[0].clamp(0.0, 100.0).toDouble();
+    double aValue = lab[1].clamp(-128.0, 128.0).toDouble();
+    double bValue = lab[2].clamp(-128.0, 128.0).toDouble();
+
+    await showModalBottomSheet<void>(
+      context: rootContext,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, sheetSetState) {
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 16,
+                  bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Adjust Slot ${index + 1}',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () async {
+                        final chosen = await _pickFromBuffer(rootContext);
+                        if (chosen == null || !mounted) return;
+                        setState(() {
+                          _stimuli[index] = chosen;
+                          _recalcMetrics();
+                        });
+                        final newLab = chosen.appearance?.lab_value;
+                        if (newLab != null && newLab.length >= 3) {
+                          sheetSetState(() {
+                            l = newLab[0].clamp(0.0, 100.0).toDouble();
+                            aValue = newLab[1].clamp(-128.0, 128.0).toDouble();
+                            bValue = newLab[2].clamp(-128.0, 128.0).toDouble();
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.layers),
+                      label: const Text('Select from Buffer'),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      'Modify Color',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 8),
+                    _labSlider(
+                      label: 'L*',
+                      min: 0,
+                      max: 100,
+                      value: l,
+                      onChanged: (value) {
+                        sheetSetState(() => l = value);
+                        _updateForegroundLab(index, value, aValue, bValue);
+                      },
+                    ),
+                    _labSlider(
+                      label: 'a*',
+                      min: -128,
+                      max: 128,
+                      value: aValue,
+                      onChanged: (value) {
+                        sheetSetState(() => aValue = value);
+                        _updateForegroundLab(index, l, value, bValue);
+                      },
+                    ),
+                    _labSlider(
+                      label: 'b*',
+                      min: -128,
+                      max: 128,
+                      value: bValue,
+                      onChanged: (value) {
+                        sheetSetState(() => bValue = value);
+                        _updateForegroundLab(index, l, aValue, value);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _updateForegroundLab(int index, double l, double a, double b) {
+    final updated = _stimulusFromLab(
+      l: l,
+      a: a,
+      b: b,
+      template: _stimuli[index],
+      sourceLabel: 'Slot ${index + 1}',
+    );
+    setState(() {
+      _stimuli[index] = updated;
+      _recalcMetrics();
+    });
+  }
+
+  Widget _labSlider({
+    required String label,
+    required double min,
+    required double max,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 28,
+            child: Text(label),
+          ),
+          Expanded(
+            child: Slider(
+              min: min,
+              max: max,
+              value: value,
+              onChanged: onChanged,
+            ),
+          ),
+          SizedBox(
+            width: 56,
+            child: Text(
+              value.toStringAsFixed(1),
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
