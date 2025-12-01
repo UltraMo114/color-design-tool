@@ -3,12 +3,15 @@ package com.example.color_design_tool.camera
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
+import android.graphics.Color
 import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.hardware.camera2.CameraCharacteristics
+import android.util.Base64
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteOrder
@@ -19,6 +22,7 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 class RawRoiProcessor(
     private val args: Map<*, *>,
@@ -84,6 +88,8 @@ class RawRoiProcessor(
             }
         }
     }
+
+    private val debugOptions = DebugConfig.from(args["debugConfig"])
 
     private fun computeRawRectForLogging(
         normalizedRoi: RectF,
@@ -156,15 +162,72 @@ class RawRoiProcessor(
         config: RawPipelineConfig,
         metadata: Map<String, Any?>,
     ): RawPipelineResult {
-        val cameraRgb = accumulateRaw(
-            rawPath = config.rawPath,
-            roi = config.roi,
-            rowStride = config.rowStride,
-            pixelStride = config.pixelStride,
-            cfaPattern = config.cfaPattern,
-            blackLevels = config.blackLevels,
-            whiteLevel = config.whiteLevel,
+        val pipelineMetadata = buildPipelineMetadata(config, metadata)
+        val rawBuffer = loadRawRoi(config)
+        val context = PipelineContext(
+            rawBuffer = rawBuffer,
+            width = config.roi.width(),
+            height = config.roi.height(),
+            metadata = pipelineMetadata,
+            debugConfig = debugOptions,
         )
+        val executor = PipelineExecutor(
+            listOf(
+                DemosaicStage(),
+                WhiteBalanceStage(),
+                ColorCorrectionStage(),
+                GammaStage(),
+            ),
+        )
+        val finalBitmap = executor.execute(context)
+        val cameraSample = context.cameraSample ?: ChannelAverages(0.0, 0.0, 0.0, 0.0)
+        val balancedSample = context.balancedSample ?: cameraSample
+        val xyzSample = context.xyzSample ?: doubleArrayOf(0.0, 0.0, 0.0)
+        return RawPipelineResult(
+            cameraRgb = cameraSample,
+            balancedRgb = balancedSample,
+            whiteBalanceGains = pipelineMetadata.whiteBalanceGains,
+            xyz = xyzSample,
+            camToXyzMatrix = pipelineMetadata.colorMatrix,
+            xyzToCamMatrix = pipelineMetadata.xyzToCamMatrix,
+            colorMatrixSource = pipelineMetadata.colorMatrixSource,
+            colorMatrixOriginal = pipelineMetadata.colorMatrixOriginal.copyOf(),
+            previewBitmap = finalBitmap,
+            debugArtifacts = context.debugArtifacts.toMap(),
+        )
+    }
+
+    private fun loadRawRoi(config: RawPipelineConfig): ShortArray {
+        val width = config.roi.width()
+        val height = config.roi.height()
+        val buffer = ShortArray(width * height)
+        FileInputStream(config.rawPath).use { input ->
+            val mapped = input.channel.map(
+                FileChannel.MapMode.READ_ONLY,
+                0,
+                input.channel.size(),
+            ).order(ByteOrder.LITTLE_ENDIAN)
+            for (y in 0 until height) {
+                val rowBase = (config.roi.top + y) * config.rowStride
+                for (x in 0 until width) {
+                    val column = config.roi.left + x
+                    val index = rowBase + column * config.pixelStride
+                    val targetIndex = y * width + x
+                    if (index >= 0 && index + 2 <= mapped.capacity()) {
+                        buffer[targetIndex] = mapped.getShort(index)
+                    } else {
+                        buffer[targetIndex] = 0
+                    }
+                }
+            }
+        }
+        return buffer
+    }
+
+    private fun buildPipelineMetadata(
+        config: RawPipelineConfig,
+        metadata: Map<String, Any?>,
+    ): CameraMetadata {
         val whiteBalanceGains = if (config.skipWhiteBalance) {
             doubleArrayOf(1.0, 1.0, 1.0)
         } else {
@@ -173,25 +236,29 @@ class RawRoiProcessor(
                 config.asShotNeutral,
             )
         }
-        val workingRgb = if (config.skipWhiteBalance) cameraRgb else applyWhiteBalance(cameraRgb, whiteBalanceGains)
         val interpolatedMatrix = calculateInterpolatedMatrix(
             metadata = metadata,
             colorCorrectionGains = config.colorCorrectionGains,
             fallbackMatrix = config.camToXyzMatrix,
             fallbackSource = config.colorMatrixSource,
         )
-        val xyz = multiplyColorMatrix(interpolatedMatrix.matrix, workingRgb)
-        val xyzToCam = invert3x3(interpolatedMatrix.matrix) ?: config.xyzToCamMatrix
-        val clamped = DoubleArray(xyz.size) { index -> max(0.0, xyz[index]) }
-        return RawPipelineResult(
-            cameraRgb = cameraRgb,
-            balancedRgb = workingRgb,
-            whiteBalanceGains = whiteBalanceGains,
-            xyz = clamped,
-            camToXyzMatrix = interpolatedMatrix.matrix,
-            xyzToCamMatrix = xyzToCam,
+        val matrixCopy = interpolatedMatrix.matrix.copyOf()
+        val xyzToCam = invert3x3(matrixCopy) ?: config.xyzToCamMatrix
+        val blackLevels = IntArray(4) { index ->
+            config.blackLevels.getOrNull(index) ?: config.blackLevels.lastOrNull() ?: 0
+        }
+        val gamma = (args["gamma"] as? Number)?.toDouble() ?: 2.2
+        return CameraMetadata(
+            cfaPattern = config.cfaPattern,
+            blackLevels = blackLevels,
+            whiteLevel = config.whiteLevel,
+            colorMatrix = matrixCopy,
             colorMatrixSource = interpolatedMatrix.source,
-            colorMatrixOriginal = interpolatedMatrix.matrix.copyOf(),
+            xyzToCamMatrix = xyzToCam,
+            colorMatrixOriginal = config.colorMatrixOriginal.copyOf(),
+            whiteBalanceGains = whiteBalanceGains,
+            skipWhiteBalance = config.skipWhiteBalance,
+            gamma = gamma,
         )
     }
 
@@ -221,6 +288,8 @@ class RawRoiProcessor(
         val xyzToCamMatrix: DoubleArray?,
         val colorMatrixSource: String,
         val colorMatrixOriginal: DoubleArray,
+        val previewBitmap: Bitmap?,
+        val debugArtifacts: Map<String, Bitmap>,
     )
 
     private data class MatrixComputationResult(
@@ -312,7 +381,7 @@ class RawRoiProcessor(
         }
 
         val rawContext = if (mode.includesRaw()) {
-            val transposeCcm = true
+            val transposeCcm = false
             buildRawPipelineContext(
                 rawPath = rawPath!!,
                 roi = rawRect ?: throw IllegalArgumentException("Invalid RAW dimensions"),
@@ -329,6 +398,8 @@ class RawRoiProcessor(
         } else {
             null
         }
+        val rawRectMap = rawRect?.toMap()
+        val debugPayload = buildDebugPayload(rawRectMap, rawResult)
 
         return mapOf(
             "xyz" to rawResult?.xyz.nonNegativeList(),
@@ -341,8 +412,32 @@ class RawRoiProcessor(
             "camToXyzMatrix" to rawResult?.camToXyzMatrix?.toList().orEmptyList(),
             "xyzToCamMatrix" to rawResult?.xyzToCamMatrix?.toList().orEmptyList(),
             "colorMatrixSource" to (rawResult?.colorMatrixSource ?: ""),
-            "rawRect" to (rawRect?.toMap() ?: emptyMap<String, Any?>()),
+            "rawRect" to (rawRectMap ?: emptyMap<String, Any?>()),
+            "debug" to debugPayload,
         )
+    }
+
+    private fun buildDebugPayload(
+        rawRect: Map<String, Any?>?,
+        rawResult: RawPipelineResult?,
+    ): Map<String, Any?> {
+        val payload = mutableMapOf<String, Any?>()
+        if (!rawRect.isNullOrEmpty()) {
+            payload["rawRect"] = rawRect
+        }
+        if (rawResult != null) {
+            rawResult.previewBitmap?.let { bitmap ->
+                encodeBitmapToBase64(bitmap)?.let { payload["finalImage"] = it }
+                bitmap.recycle()
+            }
+            if (rawResult.debugArtifacts.isNotEmpty()) {
+                val encodedStages = encodeArtifacts(rawResult.debugArtifacts)
+                if (encodedStages.isNotEmpty()) {
+                    payload["stages"] = encodedStages
+                }
+            }
+        }
+        return payload
     }
 
     private fun readJpegOrientationDegrees(jpegPath: String?): Int {
@@ -397,7 +492,7 @@ class RawRoiProcessor(
 
     private data class ChannelAccumulator(var sum: Double = 0.0, var count: Long = 0)
 
-    private data class ChannelAverages(
+    data class ChannelAverages(
         val red: Double,
         val greenR: Double,
         val greenB: Double,
@@ -418,52 +513,81 @@ class RawRoiProcessor(
         val xyz: DoubleArray,
     )
 
-    private fun accumulateRaw(
-        rawPath: String,
-        roi: Rect,
-        rowStride: Int,
-        pixelStride: Int,
-        cfaPattern: Int,
-        blackLevels: List<Int>,
-        whiteLevel: Int,
-    ): ChannelAverages {
-        FileInputStream(rawPath).use { input ->
-            val buffer = input.channel.map(
-                FileChannel.MapMode.READ_ONLY,
-                0,
-                input.channel.size(),
-            ).order(ByteOrder.LITTLE_ENDIAN)
-            val offsetX = roi.left
-            val offsetY = roi.top
-            val width = roi.width()
-            val height = roi.height()
-            val accumulators = arrayOf(
-                ChannelAccumulator(),
-                ChannelAccumulator(),
-                ChannelAccumulator(),
-                ChannelAccumulator(),
-            )
-            for (y in 0 until height) {
-                val rowBase = (offsetY + y) * rowStride
-                for (x in 0 until width) {
-                    val column = offsetX + x
-                    val index = rowBase + column * pixelStride
-                    if (index < 0 || index + 2 > buffer.capacity()) continue
-                    val value = buffer.getShort(index).toInt() and 0xFFFF
-                    val channel = resolveCfaChannel(cfaPattern, column, offsetY + y)
-                    val black = blackLevels.getOrNull(channel) ?: 0
-                    val corrected = (value - black).coerceAtLeast(0)
-                    val normalized = corrected.toDouble() / whiteLevel.toDouble()
-                    accumulators[channel].sum += normalized
-                    accumulators[channel].count++
-                }
+    data class PipelineContext(
+        val rawBuffer: ShortArray,
+        val width: Int,
+        val height: Int,
+        val metadata: CameraMetadata,
+        val debugConfig: DebugConfig = DebugConfig(),
+        val debugArtifacts: MutableMap<String, Bitmap> = mutableMapOf(),
+    ) {
+        var cameraSample: ChannelAverages? = null
+        var balancedSample: ChannelAverages? = null
+        var xyzSample: DoubleArray? = null
+        var linearRgb: DoubleArray? = null
+        var srgbSample: DoubleArray? = null
+
+        fun recordStage(stageName: String, bitmap: Bitmap) {
+            if (!debugConfig.shouldDumpArtifacts()) return
+            val safeConfig = bitmap.config ?: Bitmap.Config.ARGB_8888
+            debugArtifacts[stageName] = bitmap.copy(safeConfig, false)
+        }
+    }
+
+    data class CameraMetadata(
+        val cfaPattern: Int,
+        val blackLevels: IntArray,
+        val whiteLevel: Int,
+        val colorMatrix: DoubleArray,
+        val colorMatrixSource: String,
+        val xyzToCamMatrix: DoubleArray?,
+        val colorMatrixOriginal: DoubleArray,
+        val whiteBalanceGains: DoubleArray,
+        val skipWhiteBalance: Boolean,
+        val gamma: Double,
+    )
+
+    data class DebugConfig(
+        val dumpIntermediateImages: Boolean = false,
+        val bypassColorCorrection: Boolean = false,
+    ) {
+        fun shouldSkipStage(stageName: String): Boolean {
+            return bypassColorCorrection && stageName == "ColorCorrectionStage"
+        }
+
+        fun shouldDumpArtifacts(): Boolean = dumpIntermediateImages
+
+        companion object {
+            fun from(source: Any?): DebugConfig {
+                val map = source as? Map<*, *> ?: return DebugConfig()
+                return DebugConfig(
+                    dumpIntermediateImages = map["dumpIntermediateImages"].toBooleanStrict(),
+                    bypassColorCorrection = map["bypassCCM"].toBooleanStrict(),
+                )
             }
-            return ChannelAverages(
-                red = accumulators[0].average(),
-                greenR = accumulators[1].average(),
-                greenB = accumulators[2].average(),
-                blue = accumulators[3].average(),
-            )
+        }
+    }
+
+    private interface PipelineStage {
+        val name: String
+        fun process(input: Bitmap, context: PipelineContext): Bitmap
+    }
+
+    private class PipelineExecutor(
+        private val stages: List<PipelineStage>,
+    ) {
+        fun execute(context: PipelineContext): Bitmap {
+            val safeWidth = context.width.coerceAtLeast(1)
+            val safeHeight = context.height.coerceAtLeast(1)
+            var bitmap = Bitmap.createBitmap(safeWidth, safeHeight, Bitmap.Config.ARGB_8888)
+            for (stage in stages) {
+                if (context.debugConfig.shouldSkipStage(stage.name)) {
+                    continue
+                }
+                bitmap = stage.process(bitmap, context)
+                context.recordStage(stage.name, bitmap)
+            }
+            return bitmap
         }
     }
 
@@ -502,25 +626,267 @@ class RawRoiProcessor(
         }
     }
 
-    private fun applyWhiteBalance(sample: ChannelAverages, gains: DoubleArray): ChannelAverages {
-        val rGain = gains.getOrElse(0) { 1.0 }
-        val gGain = gains.getOrElse(1) { 1.0 }
-        val bGain = gains.getOrElse(2) { 1.0 }
-        return ChannelAverages(
-            red = sample.red * rGain,
-            greenR = sample.greenR * gGain,
-            greenB = sample.greenB * gGain,
-            blue = sample.blue * bGain,
+    private inner class DemosaicStage : PipelineStage {
+        override val name: String = "DemosaicStage"
+
+        private val neighborOffsets = listOf(
+            0 to 0,
+            -1 to 0,
+            1 to 0,
+            0 to -1,
+            0 to 1,
+            -1 to -1,
+            -1 to 1,
+            1 to -1,
+            1 to 1,
         )
+
+        override fun process(input: Bitmap, context: PipelineContext): Bitmap {
+            val width = context.width
+            val height = context.height
+            if (width <= 0 || height <= 0) return input
+            val normalized = DoubleArray(context.rawBuffer.size)
+            val accumulators = Array(4) { ChannelAccumulator() }
+            val metadata = context.metadata
+            val whiteLevel = metadata.whiteLevel.toDouble().coerceAtLeast(1.0)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val index = y * width + x
+                    val channel = resolveCfaChannel(metadata.cfaPattern, x, y)
+                    val rawValue = if (index in context.rawBuffer.indices) {
+                        context.rawBuffer[index].toInt() and 0xFFFF
+                    } else {
+                        0
+                    }
+                    val black = metadata.blackLevels.getOrElse(channel) { 0 }
+                    val corrected = (rawValue - black).coerceAtLeast(0)
+                    val normalizedValue = corrected / whiteLevel
+                    normalized[index] = normalizedValue
+                    accumulators[channel].sum += normalizedValue
+                    accumulators[channel].count++
+                }
+            }
+            val pixels = IntArray(width * height)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val channel = resolveCfaChannel(metadata.cfaPattern, x, y)
+                    val rgb = demosaicPixel(
+                        normalized = normalized,
+                        width = width,
+                        height = height,
+                        x = x,
+                        y = y,
+                        pattern = metadata.cfaPattern,
+                        centerChannel = channel,
+                    )
+                    pixels[y * width + x] = rgb.toColorInt()
+                }
+            }
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            val averages = ChannelAverages(
+                red = accumulators[0].average(),
+                greenR = accumulators[1].average(),
+                greenB = accumulators[2].average(),
+                blue = accumulators[3].average(),
+            )
+            context.cameraSample = averages
+            context.balancedSample = averages
+            return bitmap
+        }
+
+        private fun demosaicPixel(
+            normalized: DoubleArray,
+            width: Int,
+            height: Int,
+            x: Int,
+            y: Int,
+            pattern: Int,
+            centerChannel: Int,
+        ): DoubleArray {
+            val index = y * width + x
+            val center = normalized.getOrElse(index) { 0.0 }
+            val red = if (centerChannel == 0) center else sampleChannel(normalized, width, height, x, y, pattern, 0)
+            val green = if (centerChannel == 1 || centerChannel == 2) {
+                center
+            } else {
+                sampleGreen(normalized, width, height, x, y, pattern)
+            }
+            val blue = if (centerChannel == 3) center else sampleChannel(normalized, width, height, x, y, pattern, 3)
+            return doubleArrayOf(red, green, blue)
+        }
+
+        private fun sampleChannel(
+            normalized: DoubleArray,
+            width: Int,
+            height: Int,
+            x: Int,
+            y: Int,
+            pattern: Int,
+            targetChannel: Int,
+        ): Double {
+            var sum = 0.0
+            var count = 0
+            for ((dx, dy) in neighborOffsets) {
+                val nx = x + dx
+                val ny = y + dy
+                if (nx in 0 until width && ny in 0 until height) {
+                    val channel = resolveCfaChannel(pattern, nx, ny)
+                    if (channel == targetChannel) {
+                        sum += normalized[ny * width + nx]
+                        count++
+                    }
+                }
+            }
+            return if (count == 0) normalized[y * width + x] else sum / count
+        }
+
+        private fun sampleGreen(
+            normalized: DoubleArray,
+            width: Int,
+            height: Int,
+            x: Int,
+            y: Int,
+            pattern: Int,
+        ): Double {
+            var sum = 0.0
+            var count = 0
+            for ((dx, dy) in neighborOffsets) {
+                val nx = x + dx
+                val ny = y + dy
+                if (nx in 0 until width && ny in 0 until height) {
+                    val channel = resolveCfaChannel(pattern, nx, ny)
+                    if (channel == 1 || channel == 2) {
+                        sum += normalized[ny * width + nx]
+                        count++
+                    }
+                }
+            }
+            return if (count == 0) normalized[y * width + x] else sum / count
+        }
     }
 
-    private fun multiplyColorMatrix(matrix: DoubleArray, sample: ChannelAverages): DoubleArray {
-        if (matrix.size < 9) return sample.toRgbVector()
-        val vector = sample.toRgbVector()
-        val x = matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2]
-        val y = matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2]
-        val z = matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
-        return doubleArrayOf(x, y, z)
+    private inner class WhiteBalanceStage : PipelineStage {
+        override val name: String = "WhiteBalanceStage"
+
+        override fun process(input: Bitmap, context: PipelineContext): Bitmap {
+            val sample = context.balancedSample ?: context.cameraSample ?: return input
+            val gains = context.metadata.whiteBalanceGains
+            val corrected = if (context.metadata.skipWhiteBalance) {
+                sample
+            } else {
+                applyGains(sample, gains)
+            }
+            context.balancedSample = corrected
+            val bitmap = corrected.toBitmap(context.width, context.height)
+            return bitmap
+        }
+
+        private fun applyGains(sample: ChannelAverages, gains: DoubleArray): ChannelAverages {
+            val rGain = gains.getOrElse(0) { 1.0 }
+            val gGain = gains.getOrElse(1) { 1.0 }
+            val bGain = gains.getOrElse(2) { 1.0 }
+            return ChannelAverages(
+                red = sample.red * rGain,
+                greenR = sample.greenR * gGain,
+                greenB = sample.greenB * gGain,
+                blue = sample.blue * bGain,
+            )
+        }
+    }
+
+    private inner class ColorCorrectionStage : PipelineStage {
+        override val name: String = "ColorCorrectionStage"
+
+        override fun process(input: Bitmap, context: PipelineContext): Bitmap {
+            val sample = context.balancedSample ?: return input
+            val xyz = multiplyMatrix(context.metadata.colorMatrix, sample)
+            val clamped = DoubleArray(xyz.size) { index -> max(0.0, xyz.getOrElse(index) { 0.0 }) }
+            context.xyzSample = clamped
+            val linear = xyzToSrgbLinear(clamped).map { max(0.0, it) }.toDoubleArray()
+            context.linearRgb = linear
+            val bitmap = createSolidBitmap(context.width, context.height, linear)
+            return bitmap
+        }
+
+        private fun multiplyMatrix(matrix: DoubleArray, sample: ChannelAverages): DoubleArray {
+            if (matrix.size < 9) return sample.toRgbVector()
+            val vector = sample.toRgbVector()
+            val x = matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2]
+            val y = matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2]
+            val z = matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
+            return doubleArrayOf(x, y, z)
+        }
+    }
+
+    private inner class GammaStage : PipelineStage {
+        override val name: String = "GammaStage"
+
+        override fun process(input: Bitmap, context: PipelineContext): Bitmap {
+            val linear = context.linearRgb ?: context.balancedSample?.toRgbVector() ?: return input
+            val corrected = DoubleArray(linear.size) { index ->
+                applyGammaCurve(linear.getOrElse(index) { 0.0 }, context.metadata.gamma)
+            }
+            context.srgbSample = corrected
+            val bitmap = createSolidBitmap(context.width, context.height, corrected)
+            return bitmap
+        }
+    }
+
+    private fun encodeArtifacts(artifacts: Map<String, Bitmap>): Map<String, String> {
+        val encoded = mutableMapOf<String, String>()
+        for ((stage, bitmap) in artifacts) {
+            val data = encodeBitmapToBase64(bitmap)
+            if (data != null) {
+                encoded[stage] = data
+            }
+            bitmap.recycle()
+        }
+        return encoded
+    }
+
+    private fun encodeBitmapToBase64(bitmap: Bitmap): String? {
+        return runCatching {
+            ByteArrayOutputStream().use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+            }
+        }.getOrNull()
+    }
+
+    private fun createSolidBitmap(width: Int, height: Int, vector: DoubleArray): Bitmap {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val color = vector.toColorInt()
+        val pixels = IntArray(width * height) { color }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        return bitmap
+    }
+
+    private fun ChannelAverages.toBitmap(width: Int, height: Int): Bitmap {
+        return createSolidBitmap(width, height, toRgbVector())
+    }
+
+    private fun DoubleArray.toColorInt(): Int {
+        val r = (getOrElse(0) { 0.0 }.coerceIn(0.0, 1.0) * 255.0).roundToInt()
+        val g = (getOrElse(1) { 0.0 }.coerceIn(0.0, 1.0) * 255.0).roundToInt()
+        val b = (getOrElse(2) { 0.0 }.coerceIn(0.0, 1.0) * 255.0).roundToInt()
+        return Color.argb(255, r, g, b)
+    }
+
+    private fun xyzToSrgbLinear(xyz: DoubleArray): DoubleArray {
+        val x = xyz.getOrElse(0) { 0.0 }
+        val y = xyz.getOrElse(1) { 0.0 }
+        val z = xyz.getOrElse(2) { 0.0 }
+        val r = 3.2406 * x - 1.5372 * y - 0.4986 * z
+        val g = -0.9689 * x + 1.8758 * y + 0.0415 * z
+        val b = 0.0557 * x - 0.2040 * y + 1.0570 * z
+        return doubleArrayOf(r, g, b)
+    }
+
+    private fun applyGammaCurve(value: Double, gamma: Double): Double {
+        if (gamma <= 0.0) return value.coerceIn(0.0, 1.0)
+        val clamped = value.coerceIn(0.0, 1.0)
+        return clamped.pow(1.0 / gamma)
     }
 
     private fun calculateInterpolatedMatrix(
@@ -896,5 +1262,13 @@ class RawRoiProcessor(
             matrix[2], matrix[5], matrix[8],
         )
     }
+}
 
+private fun Any?.toBooleanStrict(): Boolean {
+    return when (this) {
+        is Boolean -> this
+        is Number -> this.toDouble() != 0.0
+        is String -> this.equals("true", ignoreCase = true) || this == "1"
+        else -> false
+    }
 }

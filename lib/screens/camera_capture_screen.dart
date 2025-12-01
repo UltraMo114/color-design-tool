@@ -323,12 +323,17 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
     }
   }
 
-  Map<String, num> _extractRawRect(Map<String, dynamic>? rawRect) {
+  Map<String, num> _extractRawRect(Map<String, dynamic>? debug) {
+    final rawRectSource = debug?['rawRect'];
+    final rect = rawRectSource is Map
+        ? Map<String, dynamic>.from(rawRectSource as Map)
+        : debug;
+    num _value(String key) => (rect?[key] as num?) ?? 0;
     return {
-      'left': (rawRect?['left'] as num?) ?? 0,
-      'top': (rawRect?['top'] as num?) ?? 0,
-      'right': (rawRect?['right'] as num?) ?? 0,
-      'bottom': (rawRect?['bottom'] as num?) ?? 0,
+      'left': _value('left'),
+      'top': _value('top'),
+      'right': _value('right'),
+      'bottom': _value('bottom'),
     };
   }
 

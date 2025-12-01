@@ -16,6 +16,35 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
   CameraCaptureResult? _result;
   bool _isCapturing = false;
   String? _error;
+  bool _dumpIntermediateImages = false;
+  bool _bypassCcm = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pushDebugConfig();
+  }
+
+  Map<String, dynamic> get _debugConfig => {
+        'dumpIntermediateImages': _dumpIntermediateImages,
+        'bypassCCM': _bypassCcm,
+      };
+
+  void _pushDebugConfig() {
+    NativeCameraChannel.instance.updateDebugConfig(_debugConfig);
+  }
+
+  void _updateDebugConfig({bool? dumpIntermediateImages, bool? bypassCcm}) {
+    setState(() {
+      if (dumpIntermediateImages != null) {
+        _dumpIntermediateImages = dumpIntermediateImages;
+      }
+      if (bypassCcm != null) {
+        _bypassCcm = bypassCcm;
+      }
+    });
+    _pushDebugConfig();
+  }
 
   Future<void> _startCapture() async {
     setState(() {
@@ -46,6 +75,8 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           const Text('This stub screen calls the native Camera2 pipeline to capture JPEG + DNG.'),
+          const SizedBox(height: 12),
+          _buildDebugConfigSection(),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _isCapturing ? null : _startCapture,
@@ -80,6 +111,30 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildDebugConfigSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Pipeline Debug Options', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Dump Intermediate Images'),
+          subtitle: const Text('Return images after each pipeline stage.'),
+          value: _dumpIntermediateImages,
+          onChanged: (value) => _updateDebugConfig(dumpIntermediateImages: value),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Bypass CCM'),
+          subtitle: const Text('Skip the Color Correction stage.'),
+          value: _bypassCcm,
+          onChanged: (value) => _updateDebugConfig(bypassCcm: value),
+        ),
+      ],
     );
   }
 

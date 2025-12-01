@@ -57,9 +57,7 @@ class CameraRoiResult {
       camToXyzMatrix: _parseDoubleList(map['camToXyzMatrix']),
       xyzToCamMatrix: _parseDoubleList(map['xyzToCamMatrix']),
       colorMatrixSource: (map['colorMatrixSource'] as String?) ?? '',
-      debug: map['rawRect'] is Map
-          ? Map<String, dynamic>.from(map['rawRect'] as Map)
-          : const {},
+      debug: _parseDebugPayload(map),
     );
   }
 
@@ -84,6 +82,20 @@ class CameraRoiResult {
     }
     return const [];
   }
+
+  static Map<String, dynamic> _parseDebugPayload(Map<String, dynamic> source) {
+    final rawDebug = source['debug'];
+    if (rawDebug is Map) {
+      return Map<String, dynamic>.from(rawDebug as Map);
+    }
+    final rawRect = source['rawRect'];
+    if (rawRect is Map) {
+      return {
+        'rawRect': Map<String, dynamic>.from(rawRect as Map),
+      };
+    }
+    return const {};
+  }
 }
 
 /// Wraps the native MethodChannel that drives the Camera2 JPEG+DNG capture flow.
@@ -93,8 +105,13 @@ class NativeCameraChannel {
   static final NativeCameraChannel instance = NativeCameraChannel._();
 
   static const MethodChannel _channel = MethodChannel('color_camera');
+  Map<String, dynamic> _debugConfig = const <String, dynamic>{};
 
   static MethodChannel get channel => _channel;
+
+  void updateDebugConfig(Map<String, dynamic> config) {
+    _debugConfig = Map<String, dynamic>.from(config);
+  }
 
   Future<CameraCaptureResult> startCapture() async {
     final result = await _channel.invokeMethod<dynamic>('startCapture');
@@ -114,6 +131,7 @@ class NativeCameraChannel {
     bool transposeCcm = false,
     List<double>? customCamToXyz,
     bool skipWhiteBalance = false,
+    Map<String, dynamic>? debugConfig,
   }) async {
     final payload = {
       'dngPath': capture.dngPath,
@@ -131,6 +149,7 @@ class NativeCameraChannel {
       'skipWhiteBalance': skipWhiteBalance,
       if (customCamToXyz != null && customCamToXyz.length >= 9)
         'customCamToXyz': customCamToXyz,
+      ..._buildDebugPayload(debugConfig),
     };
     final result = await _channel.invokeMethod<dynamic>('processRoi', payload);
     if (result is! Map) {
@@ -140,5 +159,14 @@ class NativeCameraChannel {
       );
     }
     return CameraRoiResult.fromMap(Map<String, dynamic>.from(result));
+  }
+
+  Map<String, dynamic> _buildDebugPayload(Map<String, dynamic>? overrides) {
+    final merged = <String, dynamic>{..._debugConfig};
+    if (overrides != null) {
+      merged.addAll(overrides);
+    }
+    merged.removeWhere((key, value) => value is! bool);
+    return merged.isEmpty ? const {} : {'debugConfig': merged};
   }
 }
