@@ -79,6 +79,18 @@ class RawRoiProcessor(
             resolveExifTag("TAG_CALIBRATION_ILLUMINANT1", "CalibrationIlluminant1")
         private val DNG_TAG_CALIBRATION_ILLUMINANT2 =
             resolveExifTag("TAG_CALIBRATION_ILLUMINANT2", "CalibrationIlluminant2")
+        private val CFA_NAME_TO_PATTERN = mapOf(
+            "RGGB" to CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
+            "GRBG" to CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG,
+            "GBRG" to CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG,
+            "BGGR" to CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR,
+        )
+        private val CFA_PHASE_SHIFT_SUPPORTED = setOf(
+            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
+            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG,
+            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG,
+            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR,
+        )
     }
 
     enum class RoiProcessingMode {
@@ -262,6 +274,8 @@ class RawRoiProcessor(
                 colorCorrectionGains = config.colorCorrectionGains,
             )
         }
+        val forcedCfaPattern = parseForceCfaPattern(args["forceCfaPattern"])
+        val effectiveCfaPattern = computeEffectiveCfaPattern(config.cfaPattern, config.roi, forcedCfaPattern)
         val interpolatedMatrix = calculateInterpolatedMatrix(
             metadata = metadata,
             asShotNeutral = config.asShotNeutral,
@@ -275,7 +289,7 @@ class RawRoiProcessor(
         }
         val gamma = (args["gamma"] as? Number)?.toDouble() ?: 2.2
         return CameraMetadata(
-            cfaPattern = config.cfaPattern,
+            cfaPattern = effectiveCfaPattern,
             blackLevels = blackLevels,
             whiteLevel = config.whiteLevel,
             colorMatrix = matrixCopy,
@@ -286,6 +300,30 @@ class RawRoiProcessor(
             skipWhiteBalance = config.skipWhiteBalance,
             gamma = gamma,
         )
+    }
+
+    private fun parseForceCfaPattern(rawValue: Any?): Int? {
+        return when (rawValue) {
+            null -> null
+            is Number -> rawValue.toInt()
+            is String -> {
+                val normalized = rawValue.trim()
+                if (normalized.isEmpty()) return null
+                normalized.toIntOrNull() ?: CFA_NAME_TO_PATTERN[normalized.uppercase(Locale.US)]
+            }
+            else -> null
+        }
+    }
+
+    private fun computeEffectiveCfaPattern(basePattern: Int, roi: Rect, forcedPattern: Int?): Int {
+        forcedPattern?.let { return it }
+        if (basePattern !in CFA_PHASE_SHIFT_SUPPORTED) return basePattern
+        // CameraCharacteristics CFA enums 0..3 map to a 2-bit Bayer tile, so XOR against
+        // ROI parity (bit0=horizontal, bit1=vertical) to track the local origin shift.
+        val horizontalShift = roi.left and 1
+        val verticalShift = (roi.top and 1) shl 1
+        val shiftMask = horizontalShift or verticalShift
+        return basePattern xor shiftMask
     }
 
     private data class RawPipelineConfig(
