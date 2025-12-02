@@ -176,96 +176,37 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
 
   Widget _buildPreview(BuildContext context) {
     final profile = context.watch<DisplayProfileProvider>();
-    return LayoutBuilder(builder: (context, constraints) {
-      final width = constraints.maxWidth;
-      final height = constraints.maxHeight;
-      final padding = 20.0;
-      final innerW = width - padding * 2;
-      final innerH = height - padding * 2;
-
-      // Target square side by area, clamp to available cell
-      final targetArea = width * height * _scale / _slots;
-      final sideByArea = math.sqrt(targetArea);
-
-      final layout = <int, List<int>>{1: [1, 1], 2: [2, 1], 3: [3, 1], 4: [2, 2]}[_slots]!;
-      final cols = layout[0];
-      final rows = layout[1];
-      const spacing = 15.0;
-      final cellW = (innerW - (cols - 1) * spacing) / cols;
-      final cellH = (innerH - (rows - 1) * spacing) / rows;
-      final side = math.min(sideByArea, math.min(cellW, cellH));
-
-      final bgColor = _background == null
-          ? Colors.grey.shade400
-          : profile.colorForStimulus(_background!);
-
-      return GestureDetector(
-        onTap: () async {
-          setState(() {
-            _selected = -1;
-          });
-          await _showBackgroundLightnessSheet();
-        },
-        child: Container(
-          color: bgColor,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: cols * side + (cols - 1) * spacing,
-                maxHeight: rows * side + (rows - 1) * spacing,
-              ),
-              child: Wrap(
-                spacing: spacing,
-                runSpacing: spacing,
-                alignment: WrapAlignment.center,
-                children: List.generate(_slots, (i) {
-                  final isSel = _selected == i;
-                  final stim = _stimuli[i];
-                  final color = stim == null
-                      ? Colors.grey.shade500
-                      : profile.colorForStimulus(stim);
-                  return GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () async {
-                      setState(() {
-                        _selected = i;
-                      });
-                      await _showForegroundEditor(i);
-                    },
-                    child: Container(
-                      width: side,
-                      height: side,
-                      decoration: _shapeDecoration(
-                        _pattern,
-                        color: color,
-                        border:
-                            Border.all(color: isSel ? Colors.black : Colors.black54, width: 1),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-            ),
-          ),
-        ),
-      );
-    });
-  }
-
-  Decoration _shapeDecoration(String pattern, {required Color color, Border? border}) {
-    switch (pattern) {
-      case 'circle':
-        return BoxDecoration(color: color, shape: BoxShape.circle, border: border);
-      case 'triangle':
-        // Approximate triangle by clipping via ShapeDecoration (isosceles-up)
-        return ShapeDecoration(
-          color: color,
-          shape: _TriangleBorder(side: border?.top.width ?? 0, color: border?.top.color ?? Colors.transparent),
-        );
-      case 'square':
-      default:
-        return BoxDecoration(color: color, borderRadius: BorderRadius.circular(4), border: border);
-    }
+    final backgroundColor = _background == null
+        ? Colors.grey.shade400
+        : profile.colorForStimulus(_background!);
+    final slotColors = List<Color?>.generate(
+      _slots,
+      (index) {
+        final stim = _stimuli[index];
+        if (stim == null) return null;
+        return profile.colorForStimulus(stim);
+      },
+    );
+    return ProductPatternPreview(
+      slots: _slots,
+      pattern: _pattern,
+      scale: _scale,
+      backgroundColor: backgroundColor,
+      slotColors: slotColors,
+      selectedIndex: _selected,
+      onBackgroundTap: () async {
+        setState(() {
+          _selected = -1;
+        });
+        await _showBackgroundLightnessSheet();
+      },
+      onSlotTap: (slotIndex) async {
+        setState(() {
+          _selected = slotIndex;
+        });
+        await _showForegroundEditor(slotIndex);
+      },
+    );
   }
 
   // Bottom metrics section
@@ -482,6 +423,18 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
       builder: (sheetContext) {
         return StatefulBuilder(
           builder: (context, sheetSetState) {
+            final profile = context.watch<DisplayProfileProvider>();
+            final previewBackground = _background == null
+                ? Colors.grey.shade400
+                : profile.colorForStimulus(_background!);
+            final previewSlots = List<Color?>.generate(
+              _slots,
+              (slot) {
+                final stim = _stimuli[slot];
+                if (stim == null) return null;
+                return profile.colorForStimulus(stim);
+              },
+            );
             return SafeArea(
               child: Padding(
                 padding: EdgeInsets.only(
@@ -490,72 +443,127 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
                   top: 16,
                   bottom: 16 + MediaQuery.of(sheetContext).viewInsets.bottom,
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Adjust Slot ${index + 1}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      onPressed: () async {
-                        final chosen = await _pickFromBuffer(rootContext);
-                        if (chosen == null || !mounted) return;
-                        setState(() {
-                          _stimuli[index] = chosen;
-                          _recalcMetrics();
-                        });
-                        final newLab = chosen.appearance?.lab_value;
-                        if (newLab != null && newLab.length >= 3) {
-                          sheetSetState(() {
-                            l = newLab[0].clamp(0.0, 100.0).toDouble();
-                            aValue = newLab[1].clamp(-128.0, 128.0).toDouble();
-                            bValue = newLab[2].clamp(-128.0, 128.0).toDouble();
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Adjust Slot ${index + 1}',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 220,
+                        width: double.infinity,
+                        child: ProductPatternPreview(
+                          slots: _slots,
+                          pattern: _pattern,
+                          scale: _scale,
+                          backgroundColor: previewBackground,
+                          slotColors: previewSlots,
+                          selectedIndex: index,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: () async {
+                          final chosen = await _pickFromBuffer(rootContext);
+                          if (chosen == null || !mounted) return;
+                          setState(() {
+                            _stimuli[index] = chosen;
+                            _recalcMetrics();
                           });
-                        }
-                      },
-                      icon: const Icon(Icons.layers),
-                      label: const Text('Select from Buffer'),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      'Modify Color',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    _labSlider(
-                      label: 'L*',
-                      min: 0,
-                      max: 100,
-                      value: l,
-                      onChanged: (value) {
-                        sheetSetState(() => l = value);
-                        _updateForegroundLab(index, value, aValue, bValue);
-                      },
-                    ),
-                    _labSlider(
-                      label: 'a*',
-                      min: -128,
-                      max: 128,
-                      value: aValue,
-                      onChanged: (value) {
-                        sheetSetState(() => aValue = value);
-                        _updateForegroundLab(index, l, value, bValue);
-                      },
-                    ),
-                    _labSlider(
-                      label: 'b*',
-                      min: -128,
-                      max: 128,
-                      value: bValue,
-                      onChanged: (value) {
-                        sheetSetState(() => bValue = value);
-                        _updateForegroundLab(index, l, aValue, value);
-                      },
-                    ),
-                  ],
+                          final newLab = chosen.appearance?.lab_value;
+                          if (newLab != null && newLab.length >= 3) {
+                            sheetSetState(() {
+                              l = newLab[0].clamp(0.0, 100.0).toDouble();
+                              aValue = newLab[1].clamp(-128.0, 128.0).toDouble();
+                              bValue = newLab[2].clamp(-128.0, 128.0).toDouble();
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.layers),
+                        label: const Text('Select from Buffer'),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        'Modify Color',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      _labSlider(
+                        label: 'L*',
+                        min: 0,
+                        max: 100,
+                        value: l,
+                        onChanged: (value) {
+                          sheetSetState(() => l = value);
+                          _updateForegroundLab(index, value, aValue, bValue);
+                        },
+                      ),
+                      _labSlider(
+                        label: 'a*',
+                        min: -128,
+                        max: 128,
+                        value: aValue,
+                        onChanged: (value) {
+                          sheetSetState(() => aValue = value);
+                          _updateForegroundLab(index, l, value, bValue);
+                        },
+                      ),
+                      _labSlider(
+                        label: 'b*',
+                        min: -128,
+                        max: 128,
+                        value: bValue,
+                        onChanged: (value) {
+                          sheetSetState(() => bValue = value);
+                          _updateForegroundLab(index, l, aValue, value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Auto Optimize',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          ActionChip(
+                            avatar: const Icon(Icons.auto_fix_high, size: 18),
+                            label: const Text('Max Harmony (CH)'),
+                            onPressed: () {
+                              final result = _optimizeColorForMetric(index, 'CH');
+                              if (result != null) {
+                                sheetSetState(() {
+                                  l = result[0];
+                                  aValue = result[1];
+                                  bValue = result[2];
+                                });
+                              }
+                            },
+                          ),
+                          ActionChip(
+                            avatar: const Icon(Icons.bolt_outlined, size: 18),
+                            label: const Text('Max Active (AP)'),
+                            onPressed: () {
+                              final result = _optimizeColorForMetric(index, 'AP');
+                              if (result != null) {
+                                sheetSetState(() {
+                                  l = result[0];
+                                  aValue = result[1];
+                                  bValue = result[2];
+                                });
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -577,6 +585,83 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
       _stimuli[index] = updated;
       _recalcMetrics();
     });
+  }
+
+  List<double>? _optimizeColorForMetric(int targetIndex, String metricType) {
+    if (targetIndex < 0 || targetIndex >= _slots) {
+      return null;
+    }
+    final references = <List<double>>[];
+    void addReference(ColorStimulus? stimulus) {
+      final lab = stimulus?.appearance?.lab_value;
+      if (lab != null && lab.length >= 3) {
+        references.add([lab[0], lab[1], lab[2]]);
+      }
+    }
+
+    addReference(_background);
+    for (var i = 0; i < _slots; i++) {
+      if (i == targetIndex) continue;
+      addReference(_stimuli[i]);
+    }
+
+    if (references.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please add a background or other slots before optimizing.'),
+        ),
+      );
+      return null;
+    }
+
+    final random = math.Random();
+    var bestLab = List<double>.from(_labValuesOrDefault(_stimuli[targetIndex]));
+    var bestScore = _averageMetricScore(bestLab, references, metricType);
+
+    const iterations = 500;
+    const stepL = 15.0;
+    const stepAB = 25.0;
+
+    for (var i = 0; i < iterations; i++) {
+      final decay = 1.0 - (i / iterations);
+      final candidate = <double>[
+        (bestLab[0] + _randomDelta(random, stepL * decay)).clamp(0.0, 100.0).toDouble(),
+        (bestLab[1] + _randomDelta(random, stepAB * decay)).clamp(-128.0, 128.0).toDouble(),
+        (bestLab[2] + _randomDelta(random, stepAB * decay)).clamp(-128.0, 128.0).toDouble(),
+      ];
+      final score = _averageMetricScore(candidate, references, metricType);
+      if (score > bestScore) {
+        bestScore = score;
+        bestLab = candidate;
+      }
+    }
+
+    _updateForegroundLab(targetIndex, bestLab[0], bestLab[1], bestLab[2]);
+    return bestLab;
+  }
+
+  double _averageMetricScore(
+    List<double> candidate,
+    List<List<double>> references,
+    String metricType,
+  ) {
+    final key = metricType.toUpperCase();
+    if (references.isEmpty) return double.negativeInfinity;
+    double total = 0;
+    int count = 0;
+    for (final ref in references) {
+      final metrics = calculateColorMetrics(candidate, ref);
+      final value = metrics[key];
+      if (value == null || value.isNaN) continue;
+      total += value;
+      count++;
+    }
+    return count == 0 ? double.negativeInfinity : total / count;
+  }
+
+  double _randomDelta(math.Random random, double magnitude) {
+    if (magnitude <= 0) return 0;
+    return (random.nextDouble() * 2 - 1) * magnitude;
   }
 
   Widget _labSlider({
@@ -668,6 +753,125 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
         );
       },
     );
+  }
+}
+
+class ProductPatternPreview extends StatelessWidget {
+  const ProductPatternPreview({
+    super.key,
+    required this.slots,
+    required this.pattern,
+    required this.scale,
+    required this.backgroundColor,
+    required this.slotColors,
+    required this.selectedIndex,
+    this.onBackgroundTap,
+    this.onSlotTap,
+  });
+
+  final int slots;
+  final String pattern;
+  final double scale;
+  final Color backgroundColor;
+  final List<Color?> slotColors;
+  final int? selectedIndex;
+  final VoidCallback? onBackgroundTap;
+  final ValueChanged<int>? onSlotTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final rawHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : constraints.maxWidth;
+        final height = rawHeight.isFinite && rawHeight > 0 ? rawHeight : width;
+        final padding = 20.0;
+        final innerW = math.max(width - padding * 2, 20.0);
+        final innerH = math.max(height - padding * 2, 20.0);
+        final effectiveSlots = math.max(slots, 1);
+        final targetArea = width * height * scale / effectiveSlots;
+        final sideByArea = math.sqrt(targetArea.isFinite ? targetArea : 0);
+        const layoutMap = {
+          1: [1, 1],
+          2: [2, 1],
+          3: [3, 1],
+          4: [2, 2],
+        };
+        final layout = layoutMap[effectiveSlots] ?? [effectiveSlots, 1];
+        final cols = layout[0];
+        final rows = layout[1];
+        const spacing = 15.0;
+        final cellW = (innerW - (cols - 1) * spacing) / cols;
+        final cellH = (innerH - (rows - 1) * spacing) / rows;
+        final minCell = math.min(cellW, cellH);
+        final computedSide =
+            sideByArea.isFinite && sideByArea > 0 ? math.min(sideByArea, minCell) : minCell;
+        final side = computedSide.isFinite && computedSide > 0 ? computedSide : 40.0;
+
+        return GestureDetector(
+          onTap: onBackgroundTap,
+          behavior: onBackgroundTap == null ? HitTestBehavior.deferToChild : HitTestBehavior.opaque,
+          child: Container(
+            color: backgroundColor,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: cols * side + (cols - 1) * spacing,
+                  maxHeight: rows * side + (rows - 1) * spacing,
+                ),
+                child: Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  alignment: WrapAlignment.center,
+                  children: List.generate(slots, (index) {
+                    final color = index < slotColors.length && slotColors[index] != null
+                        ? slotColors[index]!
+                        : Colors.grey.shade500;
+                    final isSelected = selectedIndex == index;
+                    final borderColor = isSelected ? Colors.black : Colors.black54;
+                    return GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: onSlotTap == null ? null : () => onSlotTap!(index),
+                      child: Container(
+                        width: side,
+                        height: side,
+                        decoration: _shapeDecoration(pattern, color, borderColor),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Decoration _shapeDecoration(String pattern, Color color, Color borderColor) {
+    const borderWidth = 1.0;
+    switch (pattern) {
+      case 'circle':
+        return BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(color: borderColor, width: borderWidth),
+        );
+      case 'triangle':
+        return ShapeDecoration(
+          color: color,
+          shape: _TriangleBorder(side: borderWidth, color: borderColor),
+        );
+      case 'square':
+      default:
+        return BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: borderColor, width: borderWidth),
+        );
+    }
   }
 }
 

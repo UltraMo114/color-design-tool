@@ -975,56 +975,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                         'Saved ROI entries: ${_roiLog.length}',
                         style: theme.textTheme.bodySmall,
                       ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('ΔE threshold'),
-                        Text(_deltaEThreshold.toStringAsFixed(1)),
-                      ],
-                    ),
-                    Slider(
-                      value: _deltaEThreshold,
-                      min: 0.5,
-                      max: 10,
-                      divisions: 95,
-                      label: _deltaEThreshold.toStringAsFixed(1),
-                      onChanged: (value) =>
-                          setState(() => _deltaEThreshold = value),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: canConfirm ? () => _confirmRoi() : null,
-                            icon: _isProcessing
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.check),
-                            label: Text(
-                              _isProcessing ? 'Processing...' : 'Confirm ROI',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          onPressed: _roiLog.isEmpty ? null : _dumpRoiLog,
-                          icon: const Icon(Icons.archive_outlined),
-                          label: Text('Export CSV (${_roiLog.length})'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (_roiLog.isNotEmpty)
-                      Text(
-                        'Saved ROI entries: ${_roiLog.length}',
-                        style: theme.textTheme.bodySmall,
-                      ),
                   ],
                 ),
               ),
