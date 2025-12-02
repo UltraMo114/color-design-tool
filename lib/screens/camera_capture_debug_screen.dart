@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,15 +10,17 @@ class CameraCaptureDebugScreen extends StatefulWidget {
   const CameraCaptureDebugScreen({super.key});
 
   @override
-  State<CameraCaptureDebugScreen> createState() => _CameraCaptureDebugScreenState();
+  State<CameraCaptureDebugScreen> createState() =>
+      _CameraCaptureDebugScreenState();
 }
 
 class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
   CameraCaptureResult? _result;
   bool _isCapturing = false;
   String? _error;
-  bool _dumpIntermediateImages = false;
   bool _bypassCcm = false;
+  String? _metadataDumpPath;
+  String? _metadataDumpError;
 
   @override
   void initState() {
@@ -25,20 +28,14 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
     _pushDebugConfig();
   }
 
-  Map<String, dynamic> get _debugConfig => {
-        'dumpIntermediateImages': _dumpIntermediateImages,
-        'bypassCCM': _bypassCcm,
-      };
+  Map<String, dynamic> get _debugConfig => {'bypassCCM': _bypassCcm};
 
   void _pushDebugConfig() {
     NativeCameraChannel.instance.updateDebugConfig(_debugConfig);
   }
 
-  void _updateDebugConfig({bool? dumpIntermediateImages, bool? bypassCcm}) {
+  void _updateDebugConfig({bool? bypassCcm}) {
     setState(() {
-      if (dumpIntermediateImages != null) {
-        _dumpIntermediateImages = dumpIntermediateImages;
-      }
       if (bypassCcm != null) {
         _bypassCcm = bypassCcm;
       }
@@ -50,20 +47,69 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
     setState(() {
       _isCapturing = true;
       _error = null;
+      _metadataDumpPath = null;
+      _metadataDumpError = null;
     });
 
     try {
       final result = await NativeCameraChannel.instance.startCapture();
-      setState(() => _result = result);
+      String? metadataPath;
+      String? metadataError;
+      try {
+        metadataPath = await _dumpMetadataToJson(result);
+      } catch (err) {
+        metadataError = err.toString();
+        debugPrint('Failed to dump capture metadata: $metadataError');
+      }
+      if (!mounted) return;
+      setState(() {
+        _result = result;
+        _metadataDumpPath = metadataPath;
+        _metadataDumpError = metadataError;
+      });
+      if (metadataPath != null) {
+        _showSnackBar('Metadata saved to $metadataPath');
+      } else if (metadataError != null) {
+        _showSnackBar('Failed to save metadata JSON');
+      }
     } on PlatformException catch (e) {
+      if (!mounted) return;
       setState(() => _error = '${e.code}: ${e.message}');
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e.toString());
     } finally {
       if (mounted) {
         setState(() => _isCapturing = false);
       }
     }
+  }
+
+  Future<String?> _dumpMetadataToJson(CameraCaptureResult capture) async {
+    if (capture.metadata.isEmpty) {
+      return null;
+    }
+    final dngFile = File(capture.dngPath);
+    final directory = dngFile.parent;
+    final baseName = dngFile.uri.pathSegments.isNotEmpty
+        ? dngFile.uri.pathSegments.last
+        : 'capture';
+    final dotIndex = baseName.lastIndexOf('.');
+    final stem = dotIndex == -1 ? baseName : baseName.substring(0, dotIndex);
+    final file = File(
+      '${directory.path}/'
+      '${stem}_metadata.json',
+    );
+    const encoder = JsonEncoder.withIndent('  ');
+    await file.writeAsString(encoder.convert(capture.metadata));
+    return file.path;
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -74,7 +120,9 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('This stub screen calls the native Camera2 pipeline to capture JPEG + DNG.'),
+          const Text(
+            'This stub screen calls the native Camera2 pipeline to capture JPEG + DNG.',
+          ),
           const SizedBox(height: 12),
           _buildDebugConfigSection(),
           const SizedBox(height: 12),
@@ -97,6 +145,15 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
             _ResultTile(label: 'JPEG Path', value: result.jpegPath),
             _ResultTile(label: 'DNG Path', value: result.dngPath),
             _ResultTile(label: 'RAW Buffer Path', value: result.rawBufferPath),
+            if (result.metadata.isNotEmpty)
+              _ResultTile(
+                label: 'Metadata JSON',
+                value:
+                    _metadataDumpPath ??
+                    (_metadataDumpError != null
+                        ? 'Failed: $_metadataDumpError'
+                        : 'Metadata not saved'),
+              ),
             const SizedBox(height: 8),
             Text('Metadata', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
@@ -104,7 +161,8 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
               const Text('No metadata returned.')
             else
               ...result.metadata.entries.map(
-                (entry) => _ResultTile(label: entry.key, value: '${entry.value}'),
+                (entry) =>
+                    _ResultTile(label: entry.key, value: '${entry.value}'),
               ),
             const SizedBox(height: 12),
             _buildJpegPreview(result.jpegPath),
@@ -118,15 +176,11 @@ class _CameraCaptureDebugScreenState extends State<CameraCaptureDebugScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Pipeline Debug Options', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Dump Intermediate Images'),
-          subtitle: const Text('Return images after each pipeline stage.'),
-          value: _dumpIntermediateImages,
-          onChanged: (value) => _updateDebugConfig(dumpIntermediateImages: value),
+        Text(
+          'Pipeline Debug Options',
+          style: Theme.of(context).textTheme.titleMedium,
         ),
+        const SizedBox(height: 8),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text('Bypass CCM'),

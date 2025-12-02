@@ -93,7 +93,7 @@ class MainActivity : FlutterActivity() {
     }
     roiExecutor.execute {
       runCatching {
-        RawRoiProcessor(args).process()
+        RawRoiProcessor(applicationContext, args).process()
       }.onSuccess {
         runOnUiThread { result.success(it) }
       }.onFailure {

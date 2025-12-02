@@ -1,5 +1,6 @@
 package com.example.color_design_tool.camera
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
@@ -11,12 +12,20 @@ import android.hardware.camera2.CameraCharacteristics
 import android.util.Base64
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import kotlin.io.walkTopDown
+import kotlin.text.Charsets
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -25,6 +34,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 
 class RawRoiProcessor(
+    private val context: Context,
     private val args: Map<*, *>,
 ) {
     companion object {
@@ -52,6 +62,7 @@ class RawRoiProcessor(
             -0.39944759, 2.60659054, -0.24851274,
             -0.10426435, -0.52410596, 1.43435930,
         )
+        private const val RAW_DUMP_CHUNK_BYTES = 8192
         // ExifInterface 1.3.x misses DNG tag constants; resolve with reflection + string fallback for compatibility.
         private fun resolveExifTag(fieldName: String, fallback: String): String {
             return runCatching {
@@ -139,7 +150,7 @@ class RawRoiProcessor(
         val colorMatrixOriginal = colorTransform.inverseMatrix?.copyOf() ?: baseMatrix
         val colorCorrectionGains = metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_GAINS)
         val argSkip = (args["skipWhiteBalance"] as? Boolean) == true
-        val skipWb = argSkip || colorTransform.source.startsWith("customCamToXyz")
+        val skipWb = argSkip
         return RawPipelineConfig(
             rawPath = rawPath,
             roi = roi,
@@ -183,6 +194,17 @@ class RawRoiProcessor(
         val cameraSample = context.cameraSample ?: ChannelAverages(0.0, 0.0, 0.0, 0.0)
         val balancedSample = context.balancedSample ?: cameraSample
         val xyzSample = context.xyzSample ?: doubleArrayOf(0.0, 0.0, 0.0)
+        val debugPackagePath = if (debugOptions.shouldDumpArtifacts()) {
+            dumpDebugPackage(
+                config = config,
+                pipelineMetadata = pipelineMetadata,
+                rawBuffer = rawBuffer,
+                debugArtifacts = context.debugArtifacts,
+                captureMetadata = metadata,
+            )
+        } else {
+            null
+        }
         return RawPipelineResult(
             cameraRgb = cameraSample,
             balancedRgb = balancedSample,
@@ -193,6 +215,7 @@ class RawRoiProcessor(
             colorMatrixSource = pipelineMetadata.colorMatrixSource,
             colorMatrixOriginal = pipelineMetadata.colorMatrixOriginal.copyOf(),
             previewBitmap = finalBitmap,
+            debugPackagePath = debugPackagePath,
             debugArtifacts = context.debugArtifacts.toMap(),
         )
     }
@@ -289,6 +312,7 @@ class RawRoiProcessor(
         val colorMatrixSource: String,
         val colorMatrixOriginal: DoubleArray,
         val previewBitmap: Bitmap?,
+        val debugPackagePath: String?,
         val debugArtifacts: Map<String, Bitmap>,
     )
 
@@ -426,6 +450,7 @@ class RawRoiProcessor(
             payload["rawRect"] = rawRect
         }
         if (rawResult != null) {
+            rawResult.debugPackagePath?.let { payload["debugPackagePath"] = it }
             rawResult.previewBitmap?.let { bitmap ->
                 encodeBitmapToBase64(bitmap)?.let { payload["finalImage"] = it }
                 bitmap.recycle()
@@ -438,6 +463,170 @@ class RawRoiProcessor(
             }
         }
         return payload
+    }
+
+    private fun dumpDebugPackage(
+        config: RawPipelineConfig,
+        pipelineMetadata: CameraMetadata,
+        rawBuffer: ShortArray,
+        debugArtifacts: Map<String, Bitmap>,
+        captureMetadata: Map<String, Any?>,
+    ): String? {
+        val externalRoot = runCatching { context.getExternalFilesDir(null) }.getOrNull()
+        val debugRoot = when {
+            externalRoot != null -> File(externalRoot, "debug_captures")
+            else -> File(config.rawPath).parentFile ?: context.filesDir
+        }
+        if (!debugRoot.exists() && !debugRoot.mkdirs()) {
+            Log.w("RawRoiProcessor", "Unable to create debug root: ${debugRoot.absolutePath}")
+            return null
+        }
+        val timestamp = System.currentTimeMillis()
+        val captureDir = File(debugRoot, "debug_capture_$timestamp")
+        if (!captureDir.exists() && !captureDir.mkdirs()) {
+            Log.w("RawRoiProcessor", "Unable to create debug capture dir: ${captureDir.absolutePath}")
+            return null
+        }
+        return runCatching {
+            val metadataFile = File(captureDir, "metadata.json")
+            val rawFile = File(captureDir, "input.raw")
+            writeMetadataJson(metadataFile, config, pipelineMetadata, captureMetadata)
+            writeRawInput(rawFile, rawBuffer)
+            val writtenStages = writeStageArtifacts(captureDir, debugArtifacts)
+            val metadataReady = metadataFile.exists() && rawFile.exists()
+            val stagesReady = debugArtifacts.isEmpty() || (
+                writtenStages.size == debugArtifacts.size &&
+                    writtenStages.all { it.parentFile == captureDir && it.exists() }
+                )
+            if (!metadataReady || !stagesReady) {
+                throw IllegalStateException("Debug dump missing required artifacts.")
+            }
+            val zipFile = File(debugRoot, "debug_capture_${timestamp}.zip")
+            zipDirectory(captureDir, zipFile)
+            zipFile.absolutePath
+        }.onFailure {
+            Log.w("RawRoiProcessor", "Debug dump failed: ${it.message}", it)
+        }.getOrNull()
+    }
+
+    private fun writeMetadataJson(
+        target: File,
+        config: RawPipelineConfig,
+        pipelineMetadata: CameraMetadata,
+        captureMetadata: Map<String, Any?>,
+    ) {
+        val json = JSONObject().apply {
+            put("width", config.roi.width())
+            put("height", config.roi.height())
+            put("whiteLevel", pipelineMetadata.whiteLevel)
+            put("blackLevel", JSONArray().apply {
+                pipelineMetadata.blackLevels.forEach { put(it) }
+            })
+            put("wbGains", buildWhiteBalanceJson(pipelineMetadata, config))
+            put("ccm", buildCcmJson(pipelineMetadata.colorMatrix))
+            put("colorSpace", determineColorSpaceName(captureMetadata))
+        }
+        FileOutputStream(target).use { stream ->
+            stream.write(json.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    private fun buildWhiteBalanceJson(
+        metadata: CameraMetadata,
+        config: RawPipelineConfig,
+    ): JSONObject {
+        val wb = metadata.whiteBalanceGains
+        val colorGains = config.colorCorrectionGains
+        val green = wb.valueAtOrDefault(1, 1.0)
+        val gEven = colorGains.valueAt(1) ?: green
+        val gOdd = colorGains.valueAt(2) ?: gEven
+        return JSONObject().apply {
+            put("r", wb.valueAtOrDefault(0, 1.0))
+            put("g", green)
+            put("b", wb.valueAtOrDefault(2, 1.0))
+            put("gEven", gEven)
+            put("gOdd", gOdd)
+        }
+    }
+
+    private fun buildCcmJson(matrix: DoubleArray): JSONArray {
+        val rows = JSONArray()
+        for (row in 0 until 3) {
+            val rowArray = JSONArray()
+            for (col in 0 until 3) {
+                val index = row * 3 + col
+                rowArray.put(if (index in matrix.indices) matrix[index] else 0.0)
+            }
+            rows.put(rowArray)
+        }
+        return rows
+    }
+
+    private fun determineColorSpaceName(captureMetadata: Map<String, Any?>): String {
+        val argValue = args["colorSpace"]?.toString()?.takeIf { it.isNotBlank() }
+        val metadataValue = captureMetadata["colorSpace"]?.toString()?.takeIf { it.isNotBlank() }
+        return argValue ?: metadataValue ?: "sRGB"
+    }
+
+    private fun writeRawInput(target: File, data: ShortArray) {
+        FileOutputStream(target).use { stream ->
+            val byteBuffer = ByteBuffer.allocate(RAW_DUMP_CHUNK_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+            for (value in data) {
+                if (byteBuffer.remaining() < java.lang.Short.BYTES) {
+                    stream.write(byteBuffer.array(), 0, byteBuffer.position())
+                    byteBuffer.clear()
+                }
+                byteBuffer.putShort(value)
+            }
+            val remaining = byteBuffer.position()
+            if (remaining > 0) {
+                stream.write(byteBuffer.array(), 0, remaining)
+            }
+        }
+    }
+
+    private fun writeStageArtifacts(targetDir: File, artifacts: Map<String, Bitmap>): List<File> {
+        val written = mutableListOf<File>()
+        var index = 0
+        for ((stageName, bitmap) in artifacts) {
+            val safeName = sanitizeStageName(stageName)
+            val fileName = String.format(Locale.US, "stage_%02d_%s.png", index, safeName)
+            val file = File(targetDir, fileName)
+            FileOutputStream(file).use { stream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            }
+            written.add(file)
+            index++
+        }
+        return written
+    }
+
+    private fun sanitizeStageName(stageName: String): String {
+        val normalized = stageName.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), "_")
+        return normalized.trim('_').ifEmpty { "stage" }
+    }
+
+    private fun zipDirectory(sourceDir: File, zipFile: File) {
+        if (zipFile.exists()) {
+            zipFile.delete()
+        }
+        ZipOutputStream(FileOutputStream(zipFile)).use { zip ->
+            sourceDir.walkTopDown()
+                .filter { it.isFile }
+                .forEach { file ->
+                    val relative = sourceDir.toURI().relativize(file.toURI()).path
+                    val entryName = if (relative.isNullOrEmpty()) {
+                        file.name
+                    } else {
+                        "${sourceDir.name}/$relative"
+                    }
+                    zip.putNextEntry(ZipEntry(entryName))
+                    file.inputStream().use { input ->
+                        input.copyTo(zip)
+                    }
+                    zip.closeEntry()
+                }
+        }
     }
 
     private fun readJpegOrientationDegrees(jpegPath: String?): Int {
@@ -1175,6 +1364,15 @@ class RawRoiProcessor(
     private fun DoubleArray.copy3x3(): DoubleArray? {
         if (this.size < 9) return null
         return this.copyOf(9)
+    }
+
+    private fun DoubleArray.valueAtOrDefault(index: Int, fallback: Double): Double {
+        return if (index in indices) this[index] else fallback
+    }
+
+    private fun DoubleArray?.valueAt(index: Int): Double? {
+        if (this == null) return null
+        return if (index in this.indices) this[index] else null
     }
 
     private fun extractWhiteBalanceGains(
