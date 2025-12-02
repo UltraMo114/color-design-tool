@@ -25,8 +25,11 @@ class CameraCaptureScreen extends StatefulWidget {
   State<CameraCaptureScreen> createState() => _CameraCaptureScreenState();
 }
 
+enum _PipelineVariant { auto, custom }
+
 class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   static const bool _showRoiDataPanel = false;
+  static const bool _showCustomPipelineButton = false;
   // Custom 3x3 CCM (cam_to_xyz) loaded from a CSV file in the ROI
   // export directory. When this is absent, RAW mode is disabled to
   // avoid using an uncalibrated pipeline.
@@ -164,6 +167,20 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   }
 
   Future<void> _confirmRoi({bool autoTriggered = false}) async {
+    await _runPipelineVariant(
+      _PipelineVariant.auto,
+      autoTriggered: autoTriggered,
+    );
+  }
+
+  Future<void> _runCustomPipeline() async {
+    await _runPipelineVariant(_PipelineVariant.custom);
+  }
+
+  Future<void> _runPipelineVariant(
+    _PipelineVariant variant, {
+    bool autoTriggered = false,
+  }) async {
     if (_isProcessing) return;
     final capture = _captureResult;
     final roi = _normalizedRoi;
@@ -179,105 +196,36 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       );
       return;
     }
+    if (variant == _PipelineVariant.custom && !_hasCustomCcm) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Custom CCM pipeline requires roi_custom_ccm.csv in roi_exports.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _isProcessing = true;
       _error = null;
     });
     try {
-      final targetMode = _mode;
-      // Always request BOTH so CSV/analysis包含RAW+JPEG，UI仍按当前模式显示所选数据。
       final roiResult = await NativeCameraChannel.instance.processRoi(
         capture: capture,
         normalizedRoi: roi,
         mode: 'both',
-        customCamToXyz: _customCamToXyz,
-        skipWhiteBalance: _hasCustomCcm,
+        customCamToXyz:
+            variant == _PipelineVariant.custom ? _customCamToXyz : null,
+        skipWhiteBalance: variant == _PipelineVariant.custom,
       );
-      final selectedXyz = targetMode == RoiMode.raw
-          ? roiResult.xyz
-          : roiResult.jpegXyz;
-      if (selectedXyz.isEmpty) {
-        throw StateError('Selected mode $targetMode returned no XYZ data.');
-      }
-      final xyzVec = Vector3.array(selectedXyz);
-      final scaledXyz = xyzVec..scale(100.0);
-      final lab = xyzToLab(scaledXyz, globalViewingConditions.xyzw);
-      final stimulus = labToColorstimulus(lab: lab);
-      final palette = context.read<PaletteProvider>();
-      final match = palette.findClosestByDeltaE(lab, _deltaEThreshold);
-      String feedback;
-      if (match != null) {
-        palette.replaceColorAt(match.index, stimulus);
-        feedback =
-            'Matched slot #${match.index + 1} (ΔE ${match.deltaE.toStringAsFixed(2)})';
-      } else {
-        final position = palette.addStimulusToNextEmpty(stimulus);
-        if (position == -1) {
-          throw StateError('Palette is full. Remove a swatch to add more.');
-        }
-        feedback = 'Added to slot #${position + 1}.';
-      }
-      final rawRectNums = _extractRawRect(roiResult.debug);
-      final logEntry = _RoiDumpRecord(
-        timestamp: DateTime.now(),
-        normalizedRoi: roi,
-        rawRect: rawRectNums,
-        rawRgb: roiResult.rawRgb,
-        linearRgb: roiResult.linearRgb,
-        xyz: roiResult.xyz,
-        wbGains: roiResult.whiteBalanceGains,
-        jpegSrgb: roiResult.jpegSrgb,
-        jpegLinear: roiResult.jpegLinearRgb,
-        jpegXyz: roiResult.jpegXyz,
-        camToXyzMatrix: roiResult.camToXyzMatrix,
-        xyzToCamMatrix: roiResult.xyzToCamMatrix,
-        colorMatrixSource: roiResult.colorMatrixSource,
-        colorMatrixOriginal: const [],
-        colorCorrectionTransform: const [],
-        colorMatrix1: const [],
-        colorMatrix2: const [],
-        sensorColorTransform1: const [],
-        sensorColorTransform2: const [],
-        forwardMatrix1: const [],
-        forwardMatrix2: const [],
+      _handlePipelineResult(
+        roiResult: roiResult,
+        roi: roi,
+        autoTriggered: autoTriggered,
+        pipelineLabel:
+            variant == _PipelineVariant.custom ? 'custom_ccm' : 'auto',
       );
-      if (!mounted) return;
-      setState(() {
-        if (targetMode == RoiMode.raw) {
-          _lastXyz = [scaledXyz.x, scaledXyz.y, scaledXyz.z];
-          _lastLinearRgb = roiResult.linearRgb.isEmpty
-              ? null
-              : roiResult.linearRgb;
-          _lastRawRgb = roiResult.rawRgb.isEmpty ? null : roiResult.rawRgb;
-          _lastWbGains = roiResult.whiteBalanceGains.isEmpty
-              ? null
-              : roiResult.whiteBalanceGains;
-          _lastJpegSrgb = null;
-          _lastJpegLinearRgb = null;
-          _lastJpegXyz = null;
-        } else {
-          _lastJpegSrgb = roiResult.jpegSrgb.isEmpty
-              ? null
-              : roiResult.jpegSrgb;
-          _lastJpegLinearRgb = roiResult.jpegLinearRgb.isEmpty
-              ? null
-              : roiResult.jpegLinearRgb;
-          _lastJpegXyz = roiResult.jpegXyz.isEmpty ? null : roiResult.jpegXyz;
-          _lastXyz = null;
-          _lastLinearRgb = null;
-          _lastRawRgb = null;
-          _lastWbGains = null;
-        }
-        _lastRawRect = Map<String, dynamic>.from(rawRectNums);
-        if (!autoTriggered) {
-          _roiLog.add(logEntry);
-        }
-      });
-      if (!autoTriggered) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(feedback)));
-      }
     } on PlatformException catch (e) {
       if (!mounted) return;
       setState(() => _error = '${e.code}: ${e.message}');
@@ -288,6 +236,100 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       if (mounted) {
         setState(() => _isProcessing = false);
       }
+    }
+  }
+
+  void _handlePipelineResult({
+    required CameraRoiResult roiResult,
+    required Rect roi,
+    required bool autoTriggered,
+    required String pipelineLabel,
+  }) {
+    if (!mounted) return;
+    final targetMode = _mode;
+    final selectedXyz =
+        targetMode == RoiMode.raw ? roiResult.xyz : roiResult.jpegXyz;
+    if (selectedXyz.isEmpty) {
+      throw StateError('Selected mode $targetMode returned no XYZ data.');
+    }
+    final xyzVec = Vector3.array(selectedXyz);
+    final scaledXyz = xyzVec..scale(100.0);
+    final lab = xyzToLab(scaledXyz, globalViewingConditions.xyzw);
+    final stimulus = labToColorstimulus(lab: lab);
+    final palette = context.read<PaletteProvider>();
+    final match = palette.findClosestByDeltaE(lab, _deltaEThreshold);
+    String feedback;
+    if (match != null) {
+      palette.replaceColorAt(match.index, stimulus);
+      feedback =
+          'Matched slot #${match.index + 1} (ΔE ${match.deltaE.toStringAsFixed(2)})';
+    } else {
+      final position = palette.addStimulusToNextEmpty(stimulus);
+      if (position == -1) {
+        throw StateError('Palette is full. Remove a swatch to add more.');
+      }
+      feedback = 'Added to slot #${position + 1}.';
+    }
+    final rawRectNums = _extractRawRect(roiResult.debug);
+    final logEntry = _RoiDumpRecord(
+      timestamp: DateTime.now(),
+      normalizedRoi: roi,
+      rawRect: rawRectNums,
+      rawRgb: roiResult.rawRgb,
+      linearRgb: roiResult.linearRgb,
+      xyz: roiResult.xyz,
+      wbGains: roiResult.whiteBalanceGains,
+      jpegSrgb: roiResult.jpegSrgb,
+      jpegLinear: roiResult.jpegLinearRgb,
+      jpegXyz: roiResult.jpegXyz,
+      camToXyzMatrix: roiResult.camToXyzMatrix,
+      xyzToCamMatrix: roiResult.xyzToCamMatrix,
+      colorMatrixSource: roiResult.colorMatrixSource,
+      colorMatrixOriginal: const [],
+      colorCorrectionTransform: const [],
+      colorMatrix1: const [],
+      colorMatrix2: const [],
+      sensorColorTransform1: const [],
+      sensorColorTransform2: const [],
+      forwardMatrix1: const [],
+      forwardMatrix2: const [],
+      pipelineLabel: pipelineLabel,
+    );
+    setState(() {
+      if (targetMode == RoiMode.raw) {
+        _lastXyz = [scaledXyz.x, scaledXyz.y, scaledXyz.z];
+        _lastLinearRgb =
+            roiResult.linearRgb.isEmpty ? null : roiResult.linearRgb;
+        _lastRawRgb = roiResult.rawRgb.isEmpty ? null : roiResult.rawRgb;
+        _lastWbGains = roiResult.whiteBalanceGains.isEmpty
+            ? null
+            : roiResult.whiteBalanceGains;
+        _lastJpegSrgb = null;
+        _lastJpegLinearRgb = null;
+        _lastJpegXyz = null;
+      } else {
+        _lastJpegSrgb =
+            roiResult.jpegSrgb.isEmpty ? null : roiResult.jpegSrgb;
+        _lastJpegLinearRgb = roiResult.jpegLinearRgb.isEmpty
+            ? null
+            : roiResult.jpegLinearRgb;
+        _lastJpegXyz = roiResult.jpegXyz.isEmpty ? null : roiResult.jpegXyz;
+        _lastXyz = null;
+        _lastLinearRgb = null;
+        _lastRawRgb = null;
+        _lastWbGains = null;
+      }
+      _lastRawRect = Map<String, dynamic>.from(rawRectNums);
+      if (!autoTriggered) {
+        _roiLog.add(logEntry);
+      }
+    });
+    if (!autoTriggered) {
+      final prefix =
+          pipelineLabel == 'custom_ccm' ? '[Custom CCM] ' : '';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$prefix$feedback')));
     }
   }
 
@@ -305,7 +347,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       final file = File(p.join(dir.path, 'roi_dump_$ts.csv'));
       final buffer = StringBuffer()
         ..writeln(
-          'timestamp,roi_left,roi_top,roi_right,roi_bottom,raw_left,raw_top,raw_right,raw_bottom,raw_r,raw_g,raw_b,linear_r,linear_g,linear_b,xyz_x,xyz_y,xyz_z,wb_r_gain,wb_g_gain,wb_b_gain,jpeg_srgb_r,jpeg_srgb_g,jpeg_srgb_b,jpeg_linear_r,jpeg_linear_g,jpeg_linear_b,jpeg_xyz_x,jpeg_xyz_y,jpeg_xyz_z,cam_to_xyz_m00,cam_to_xyz_m01,cam_to_xyz_m02,cam_to_xyz_m10,cam_to_xyz_m11,cam_to_xyz_m12,cam_to_xyz_m20,cam_to_xyz_m21,cam_to_xyz_m22,xyz_to_cam_m00,xyz_to_cam_m01,xyz_to_cam_m02,xyz_to_cam_m10,xyz_to_cam_m11,xyz_to_cam_m12,xyz_to_cam_m20,xyz_to_cam_m21,xyz_to_cam_m22,color_matrix_source',
+          'timestamp,roi_left,roi_top,roi_right,roi_bottom,raw_left,raw_top,raw_right,raw_bottom,raw_r,raw_g,raw_b,linear_r,linear_g,linear_b,xyz_x,xyz_y,xyz_z,wb_r_gain,wb_g_gain,wb_b_gain,jpeg_srgb_r,jpeg_srgb_g,jpeg_srgb_b,jpeg_linear_r,jpeg_linear_g,jpeg_linear_b,jpeg_xyz_x,jpeg_xyz_y,jpeg_xyz_z,cam_to_xyz_m00,cam_to_xyz_m01,cam_to_xyz_m02,cam_to_xyz_m10,cam_to_xyz_m11,cam_to_xyz_m12,cam_to_xyz_m20,cam_to_xyz_m21,cam_to_xyz_m22,xyz_to_cam_m00,xyz_to_cam_m01,xyz_to_cam_m02,xyz_to_cam_m10,xyz_to_cam_m11,xyz_to_cam_m12,xyz_to_cam_m20,xyz_to_cam_m21,xyz_to_cam_m22,color_matrix_source,pipeline',
         );
       for (final entry in _roiLog) {
         buffer.writeln(entry.toCsvRow());
@@ -713,17 +755,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                   onPressed: (index) {
                     final selected = index == 0 ? RoiMode.raw : RoiMode.jpeg;
                     if (selected == _mode) return;
-                    if (selected == RoiMode.raw && !_hasCustomCcm) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'RAW mode requires a calibrated 3x3 CCM CSV. '
-                            'Place roi_custom_ccm.csv in the roi_exports folder.',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
                     setState(() => _mode = selected);
                     if (_captureResult != null && _normalizedRoi != null) {
                       _confirmRoi(autoTriggered: true);
@@ -742,14 +773,6 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                 ),
               ],
             ),
-            if (!_hasCustomCcm)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  'RAW mode disabled: add roi_custom_ccm.csv to enable calibrated RAW.',
-                  style: TextStyle(fontSize: 12, color: Colors.redAccent),
-                ),
-              ),
             const SizedBox(height: 12),
             Expanded(
               child: SingleChildScrollView(
@@ -936,6 +959,16 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                         ),
                       ],
                     ),
+                    if (_showCustomPipelineButton)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: FilledButton.icon(
+                          onPressed:
+                              canConfirm ? () => _runCustomPipeline() : null,
+                          icon: const Icon(Icons.science_outlined),
+                          label: const Text('Run Custom CCM'),
+                        ),
+                      ),
                     const SizedBox(height: 8),
                     if (_roiLog.isNotEmpty)
                       Text(
@@ -1163,6 +1196,7 @@ class _RoiDumpRecord {
     required this.sensorColorTransform2,
     required this.forwardMatrix1,
     required this.forwardMatrix2,
+    required this.pipelineLabel,
   });
 
   final DateTime timestamp;
@@ -1186,6 +1220,7 @@ class _RoiDumpRecord {
   final List<double> sensorColorTransform2;
   final List<double> forwardMatrix1;
   final List<double> forwardMatrix2;
+  final String pipelineLabel;
 
   String toCsvRow() {
     final values = <String>[
@@ -1223,6 +1258,7 @@ class _RoiDumpRecord {
     values.addAll(_matrixValues(camToXyzMatrix, expected: 9));
     values.addAll(_matrixValues(xyzToCamMatrix, expected: 9));
     values.add(colorMatrixSource);
+    values.add(pipelineLabel);
     return values.join(',');
   }
 

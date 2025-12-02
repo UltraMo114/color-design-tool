@@ -7,7 +7,6 @@ import 'package:vector_math/vector_math.dart' show Vector3;
 import 'providers/palette_provider.dart';
 import 'providers/display_profile_provider.dart';
 import 'screens/camera_capture_screen.dart';
-import 'screens/camera_capture_debug_screen.dart';
 import 'screens/camera_calibration_screen.dart';
 import 'screens/colorway_screen.dart';
 import 'screens/product_design_screen.dart';
@@ -84,15 +83,6 @@ class PaletteScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Pipeline Debug',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CameraCaptureDebugScreen()),
-              );
-            },
-            icon: const Icon(Icons.bug_report_outlined),
-          ),
           IconButton(
             tooltip: 'Calibration',
             onPressed: () {

@@ -100,7 +100,9 @@ class RawRoiProcessor(
         }
     }
 
-    private val debugOptions = DebugConfig.from(args["debugConfig"])
+    private val debugOptions = DebugConfig.from(args["debugConfig"]).let { config ->
+        if (config.dumpIntermediateImages) config else config.copy(dumpIntermediateImages = true)
+    }
 
     private fun computeRawRectForLogging(
         normalizedRoi: RectF,
@@ -255,13 +257,14 @@ class RawRoiProcessor(
             doubleArrayOf(1.0, 1.0, 1.0)
         } else {
             extractWhiteBalanceGains(
-                config.colorCorrectionGains,
-                config.asShotNeutral,
+                metadata = metadata,
+                asShotNeutral = config.asShotNeutral,
+                colorCorrectionGains = config.colorCorrectionGains,
             )
         }
         val interpolatedMatrix = calculateInterpolatedMatrix(
             metadata = metadata,
-            colorCorrectionGains = config.colorCorrectionGains,
+            asShotNeutral = config.asShotNeutral,
             fallbackMatrix = config.camToXyzMatrix,
             fallbackSource = config.colorMatrixSource,
         )
@@ -320,6 +323,294 @@ class RawRoiProcessor(
         val matrix: DoubleArray,
         val source: String,
     )
+
+    private data class CalibrationEntry(
+        val index: Int,
+        val name: String,
+        val cct: Double,
+        val colorMatrix: DoubleArray,
+        val cameraCalibration: DoubleArray,
+    )
+
+    private data class IlluminantInfo(
+        val name: String,
+        val cct: Double?,
+    )
+
+    private val ILLUMINANT_INFO = mapOf(
+        0 to IlluminantInfo("Unknown", null),
+        1 to IlluminantInfo("Daylight", 5500.0),
+        2 to IlluminantInfo("Fluorescent", 4200.0),
+        3 to IlluminantInfo("Tungsten", 2850.0),
+        4 to IlluminantInfo("Flash", 6000.0),
+        9 to IlluminantInfo("Fine Weather", 5500.0),
+        10 to IlluminantInfo("Cloudy", 6500.0),
+        11 to IlluminantInfo("Shade", 7500.0),
+        12 to IlluminantInfo("Daylight Fluorescent", 6500.0),
+        13 to IlluminantInfo("Day White Fluorescent", 7000.0),
+        14 to IlluminantInfo("Cool White Fluorescent", 4200.0),
+        15 to IlluminantInfo("White Fluorescent", 3500.0),
+        16 to IlluminantInfo("Warm White Fluorescent", 3000.0),
+        17 to IlluminantInfo("Standard Light A", 2856.0),
+        18 to IlluminantInfo("Standard Light B", 4874.0),
+        19 to IlluminantInfo("Standard Light C", 6774.0),
+        20 to IlluminantInfo("D55", 5500.0),
+        21 to IlluminantInfo("D65", 6504.0),
+        22 to IlluminantInfo("D75", 7500.0),
+        23 to IlluminantInfo("D50", 5003.0),
+        24 to IlluminantInfo("ISO Studio Tungsten", 3200.0),
+        255 to IlluminantInfo("Other", null),
+    )
+
+    private fun calculateInterpolatedMatrix(
+        metadata: Map<String, Any?>,
+        asShotNeutral: DoubleArray?,
+        fallbackMatrix: DoubleArray,
+        fallbackSource: String,
+    ): MatrixComputationResult {
+        val calibrations = gatherCalibrationEntries(metadata)
+        val analogBalance = buildAnalogBalanceMatrix(metadata)
+        val cameraNeutral = asShotNeutral ?: metadata.toDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL)
+        tryInterpolateColorMatrix(calibrations, analogBalance, cameraNeutral)?.let { return it }
+        if (calibrations.isNotEmpty()) {
+            val entry = calibrations.first()
+            composeCameraToXyz(analogBalance, entry.cameraCalibration, entry.colorMatrix)?.let { matrix ->
+                return MatrixComputationResult(matrix, "colorMatrix${entry.index}")
+            }
+        }
+
+        val forward1 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX1, "forwardMatrix1")
+        val forward2 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX2, "forwardMatrix2")
+        if (forward1 != null && forward2 != null) {
+            val matrix = interpolateMatrices(forward1, forward2, 0.5)
+            return MatrixComputationResult(matrix, "forwardMatrix_blend")
+        }
+        if (forward1 != null) {
+            return MatrixComputationResult(forward1.copy3x3() ?: forward1, "forwardMatrix1")
+        }
+        if (forward2 != null) {
+            return MatrixComputationResult(forward2.copy3x3() ?: forward2, "forwardMatrix2")
+        }
+
+        metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM)?.copy3x3()?.let {
+            return MatrixComputationResult(it, "colorCorrectionTransform")
+        }
+
+        return MatrixComputationResult(fallbackMatrix.copy3x3() ?: fallbackMatrix, fallbackSource)
+    }
+
+    private fun tryInterpolateColorMatrix(
+        calibrations: List<CalibrationEntry>,
+        analogBalance: DoubleArray,
+        cameraNeutral: DoubleArray?,
+    ): MatrixComputationResult? {
+        if (calibrations.isEmpty()) return null
+        val neutral = cameraNeutral?.takeIf { it.size >= 3 }?.copyOf(3) ?: return null
+        val initialXy = calibrations.firstNotNullOfOrNull { entry ->
+            cameraNeutralToXy(neutral, entry.colorMatrix)
+        } ?: (0.3127 to 0.3290)
+        var xy = initialXy
+        var finalLow = calibrations.first()
+        var finalHigh = calibrations.last()
+        var finalWeight = 0.0
+        repeat(10) {
+            val cctEstimate = xyToCct(xy.first, xy.second)
+            val (low, high, weight) = selectCalibrationPair(calibrations, cctEstimate)
+            val blendedColorMatrix = interpolateMatrices(low.colorMatrix, high.colorMatrix, weight)
+            val blendedCalibration = interpolateMatrices(low.cameraCalibration, high.cameraCalibration, weight)
+            val xyzToCamera = matrixDot(analogBalance, matrixDot(blendedCalibration, blendedColorMatrix)) ?: return null
+            val cameraToXyz = invert3x3(xyzToCamera) ?: return null
+            val xyz = multiplyMatrixVector(cameraToXyz, neutral) ?: return null
+            val sum = xyz.sum()
+            if (abs(sum) < 1e-9) return null
+            val newX = xyz[0] / sum
+            val newY = xyz[1] / sum
+            finalLow = low
+            finalHigh = high
+            finalWeight = weight
+            if (abs(newX - xy.first) < 1e-6 && abs(newY - xy.second) < 1e-6) {
+                xy = newX to newY
+                return@repeat
+            }
+            xy = newX to newY
+        }
+        val blendedColorMatrix = interpolateMatrices(finalLow.colorMatrix, finalHigh.colorMatrix, finalWeight)
+        val blendedCalibration = interpolateMatrices(finalLow.cameraCalibration, finalHigh.cameraCalibration, finalWeight)
+        val xyzToCamera = matrixDot(analogBalance, matrixDot(blendedCalibration, blendedColorMatrix)) ?: return null
+        val cameraToXyz = invert3x3(xyzToCamera) ?: return null
+        return MatrixComputationResult(cameraToXyz, "colorMatrix_interpolated")
+    }
+
+    private fun gatherCalibrationEntries(metadata: Map<String, Any?>): List<CalibrationEntry> {
+        val entries = mutableListOf<CalibrationEntry>()
+        for (index in 1..3) {
+            val colorMatrix = sensorColorTransformKey(index)?.let { key ->
+                metadata.matrixForKey(key, "colorMatrix$index")
+            } ?: metadata.matrixForKey("colorMatrix$index")
+            if (colorMatrix == null) continue
+            val calibrationMatrix = sensorCalibrationKey(index)?.let { key ->
+                metadata.matrixForKey(key, "cameraCalibration$index")
+            } ?: metadata.matrixForKey("cameraCalibration$index")
+            val illuminant = resolveIlluminant(metadata, index) ?: continue
+            val entry = CalibrationEntry(
+                index = index,
+                name = illuminant.name,
+                cct = illuminant.cct ?: continue,
+                colorMatrix = colorMatrix,
+                cameraCalibration = calibrationMatrix ?: identityMatrix(),
+            )
+            entries += entry
+        }
+        return entries.sortedBy { it.cct }
+    }
+
+    private fun resolveIlluminant(metadata: Map<String, Any?>, index: Int): IlluminantInfo? {
+        val keys = mutableListOf(
+            "calibrationIlluminant$index",
+            "referenceIlluminant$index",
+        )
+        when (index) {
+            1 -> keys += MetadataKeys.SENSOR_REFERENCE_ILLUMINANT1
+            2 -> keys += MetadataKeys.SENSOR_REFERENCE_ILLUMINANT2
+            else -> keys += "sensorReferenceIlluminant$index"
+        }
+        for (key in keys) {
+            val raw = metadata[key]
+            val value = when (raw) {
+                is Number -> raw.toInt()
+                is String -> raw.toIntOrNull()
+                else -> null
+            } ?: continue
+            val info = ILLUMINANT_INFO[value]
+            if (info?.cct != null) {
+                return info
+            }
+        }
+        return null
+    }
+
+    private fun sensorColorTransformKey(index: Int): String? = when (index) {
+        1 -> MetadataKeys.SENSOR_COLOR_TRANSFORM1
+        2 -> MetadataKeys.SENSOR_COLOR_TRANSFORM2
+        else -> "sensorColorTransform$index"
+    }
+
+    private fun sensorCalibrationKey(index: Int): String? = when (index) {
+        1 -> MetadataKeys.SENSOR_CALIBRATION_TRANSFORM1
+        2 -> MetadataKeys.SENSOR_CALIBRATION_TRANSFORM2
+        else -> "sensorCalibrationTransform$index"
+    }
+
+    private fun buildAnalogBalanceMatrix(metadata: Map<String, Any?>): DoubleArray {
+        val analog = metadata.toDoubleArray("analogBalance")
+            ?: metadata.toDoubleArray("AnalogBalance")
+        val matrix = DoubleArray(9) { 0.0 }
+        for (index in 0 until 3) {
+            matrix[index * 3 + index] = analog?.getOrNull(index) ?: 1.0
+        }
+        return matrix
+    }
+
+    private fun composeCameraToXyz(
+        analogBalance: DoubleArray,
+        cameraCalibration: DoubleArray?,
+        colorMatrix: DoubleArray,
+    ): DoubleArray? {
+        val calibration = cameraCalibration ?: identityMatrix()
+        val xyzToCamera = matrixDot(analogBalance, matrixDot(calibration, colorMatrix)) ?: return null
+        return invert3x3(xyzToCamera)
+    }
+
+    private fun selectCalibrationPair(
+        calibrations: List<CalibrationEntry>,
+        cctEstimate: Double?,
+    ): Triple<CalibrationEntry, CalibrationEntry, Double> {
+        if (calibrations.size == 1 || cctEstimate == null) {
+            val entry = calibrations.first()
+            return Triple(entry, entry, 0.0)
+        }
+        if (cctEstimate <= calibrations.first().cct) {
+            val entry = calibrations.first()
+            return Triple(entry, entry, 0.0)
+        }
+        if (cctEstimate >= calibrations.last().cct) {
+            val entry = calibrations.last()
+            return Triple(entry, entry, 0.0)
+        }
+        for (i in 0 until calibrations.lastIndex) {
+            val low = calibrations[i]
+            val high = calibrations[i + 1]
+            if (cctEstimate in low.cct..high.cct) {
+                val denom = (1.0 / high.cct) - (1.0 / low.cct)
+                val weight = if (abs(denom) < 1e-9) {
+                    0.0
+                } else {
+                    ((1.0 / cctEstimate) - (1.0 / low.cct)) / denom
+                }
+                return Triple(low, high, weight.coerceIn(0.0, 1.0))
+            }
+        }
+        val low = calibrations[calibrations.lastIndex - 1]
+        val high = calibrations.last()
+        return Triple(low, high, 1.0)
+    }
+
+    private fun xyToCct(x: Double, y: Double): Double? {
+        val denom = 0.1858 - y
+        if (abs(denom) < 1e-9) return null
+        val n = (x - 0.3320) / denom
+        val cct = 449.0 * n.pow(3) + 3525.0 * n.pow(2) + 6823.3 * n + 5520.33
+        return cct.takeIf { it > 0.0 }
+    }
+
+    private fun cameraNeutralToXy(
+        cameraNeutral: DoubleArray?,
+        colorMatrix: DoubleArray?,
+    ): Pair<Double, Double>? {
+        if (cameraNeutral == null || colorMatrix == null) return null
+        if (cameraNeutral.size < 3 || colorMatrix.size < 9) return null
+        val inverse = invert3x3(colorMatrix) ?: return null
+        val vector = DoubleArray(3) { index -> cameraNeutral.getOrNull(index) ?: return null }
+        val xyz = multiplyMatrixVector(inverse, vector) ?: return null
+        val sum = xyz.sum()
+        if (abs(sum) < 1e-9) return null
+        val x = xyz[0] / sum
+        val y = xyz[1] / sum
+        if (!x.isFinite() || !y.isFinite() || x <= 0.0 || y <= 0.0) return null
+        return x to y
+    }
+
+    private fun matrixDot(left: DoubleArray?, right: DoubleArray?): DoubleArray? {
+        if (left == null || right == null) return null
+        if (left.size < 9 || right.size < 9) return null
+        val result = DoubleArray(9)
+        for (row in 0 until 3) {
+            for (col in 0 until 3) {
+                var sum = 0.0
+                for (k in 0 until 3) {
+                    sum += left[row * 3 + k] * right[k * 3 + col]
+                }
+                result[row * 3 + col] = sum
+            }
+        }
+        return result
+    }
+
+    private fun multiplyMatrixVector(matrix: DoubleArray?, vector: DoubleArray): DoubleArray? {
+        if (matrix == null || matrix.size < 9 || vector.size < 3) return null
+        val x = matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2]
+        val y = matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2]
+        val z = matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2]
+        return doubleArrayOf(x, y, z)
+    }
+
+    private fun identityMatrix(): DoubleArray {
+        return doubleArrayOf(
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,
+        )
+    }
 
     private fun enrichMetadataWithDng(
         dngPath: String?,
@@ -515,6 +806,8 @@ class RawRoiProcessor(
         pipelineMetadata: CameraMetadata,
         captureMetadata: Map<String, Any?>,
     ) {
+        val asShotNeutral = config.asShotNeutral ?: captureMetadata.toDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL)
+        val wbDumpGains = gainsFromAsShotNeutral(asShotNeutral)
         val json = JSONObject().apply {
             put("width", config.roi.width())
             put("height", config.roi.height())
@@ -522,7 +815,10 @@ class RawRoiProcessor(
             put("blackLevel", JSONArray().apply {
                 pipelineMetadata.blackLevels.forEach { put(it) }
             })
-            put("wbGains", buildWhiteBalanceJson(pipelineMetadata, config))
+            put("wbGains", buildWhiteBalanceJson(pipelineMetadata, config, wbDumpGains))
+            asShotNeutral?.let { values ->
+                put("asShotNeutral", JSONArray().apply { values.forEach { put(it) } })
+            }
             put("ccm", buildCcmJson(pipelineMetadata.colorMatrix))
             put("colorSpace", determineColorSpaceName(captureMetadata))
         }
@@ -534,8 +830,9 @@ class RawRoiProcessor(
     private fun buildWhiteBalanceJson(
         metadata: CameraMetadata,
         config: RawPipelineConfig,
+        overrideGains: DoubleArray?,
     ): JSONObject {
-        val wb = metadata.whiteBalanceGains
+        val wb = overrideGains ?: metadata.whiteBalanceGains
         val colorGains = config.colorCorrectionGains
         val green = wb.valueAtOrDefault(1, 1.0)
         val gEven = colorGains.valueAt(1) ?: green
@@ -849,7 +1146,8 @@ class RawRoiProcessor(
                     }
                     val black = metadata.blackLevels.getOrElse(channel) { 0 }
                     val corrected = (rawValue - black).coerceAtLeast(0)
-                    val normalizedValue = corrected / whiteLevel
+                    val channelRange = (metadata.whiteLevel - black).coerceAtLeast(1)
+                    val normalizedValue = corrected.toDouble() / channelRange.toDouble()
                     normalized[index] = normalizedValue
                     accumulators[channel].sum += normalizedValue
                     accumulators[channel].count++
@@ -1078,89 +1376,6 @@ class RawRoiProcessor(
         return clamped.pow(1.0 / gamma)
     }
 
-    private fun calculateInterpolatedMatrix(
-        metadata: Map<String, Any?>,
-        colorCorrectionGains: DoubleArray?,
-        fallbackMatrix: DoubleArray,
-        fallbackSource: String,
-    ): MatrixComputationResult {
-        val forward1 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX1, "forwardMatrix1")
-        val forward2 = metadata.matrixForKey(MetadataKeys.SENSOR_FORWARD_MATRIX2, "forwardMatrix2")
-        if (forward1 != null && forward2 != null) {
-            val weight = computeDualIlluminantWeight(metadata, colorCorrectionGains)
-            val matrix = interpolateMatrices(forward1, forward2, weight)
-            return MatrixComputationResult(matrix, "forwardMatrix_interpolated")
-        }
-        if (forward1 != null) {
-            return MatrixComputationResult(forward1, "forwardMatrix1")
-        }
-        if (forward2 != null) {
-            return MatrixComputationResult(forward2, "forwardMatrix2")
-        }
-
-        val inverseColor1 = metadata.matrixForKey(MetadataKeys.SENSOR_COLOR_TRANSFORM1, "colorMatrix1")?.let { invert3x3(it) }
-        val inverseColor2 = metadata.matrixForKey(MetadataKeys.SENSOR_COLOR_TRANSFORM2, "colorMatrix2")?.let { invert3x3(it) }
-        if (inverseColor1 != null && inverseColor2 != null) {
-            val weight = computeDualIlluminantWeight(metadata, colorCorrectionGains)
-            val matrix = interpolateMatrices(inverseColor1, inverseColor2, weight)
-            return MatrixComputationResult(matrix, "colorTransform_inverse_interpolated")
-        }
-        if (inverseColor1 != null) {
-            return MatrixComputationResult(inverseColor1, "colorTransform1_inverse")
-        }
-        if (inverseColor2 != null) {
-            return MatrixComputationResult(inverseColor2, "colorTransform2_inverse")
-        }
-
-        metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_TRANSFORM)?.copy3x3()?.let {
-            return MatrixComputationResult(it, "colorCorrectionTransform")
-        }
-
-        return MatrixComputationResult(fallbackMatrix.copy3x3() ?: fallbackMatrix, fallbackSource)
-    }
-
-    private fun computeDualIlluminantWeight(
-        metadata: Map<String, Any?>,
-        colorCorrectionGains: DoubleArray?,
-    ): Double {
-        val ratioA = lookupIlluminantRatio(metadata[MetadataKeys.SENSOR_REFERENCE_ILLUMINANT1].toIntOrDefault(17))
-        val ratioD65 = lookupIlluminantRatio(metadata[MetadataKeys.SENSOR_REFERENCE_ILLUMINANT2].toIntOrDefault(21))
-        val currentRatio = colorCorrectionGains?.let { gains ->
-            val red = gains.getOrNull(0)
-            val blue = gains.getOrNull(3)
-            if (red == null || blue == null || abs(blue) < 1e-9) {
-                null
-            } else {
-                red / blue
-            }
-        } ?: 1.0
-        if (abs(ratioA - ratioD65) < 1e-6) {
-            return 0.5
-        }
-        if (currentRatio >= ratioA) return 0.0
-        if (currentRatio <= ratioD65) return 1.0
-        val denominator = ratioA - ratioD65
-        if (abs(denominator) < 1e-9) return 0.5
-        val weight = (ratioA - currentRatio) / denominator
-        return weight.coerceIn(0.0, 1.0)
-    }
-
-    private fun lookupIlluminantRatio(illuminant: Int): Double {
-        return when (illuminant) {
-            1 -> 0.65    // Daylight
-            2 -> 0.8     // Fluorescent
-            3 -> 1.4     // Tungsten
-            4 -> 0.6     // Flash
-            17 -> 1.5    // StdA
-            18 -> 1.35   // StdB
-            19 -> 1.0    // D50
-            20 -> 0.75   // D55
-            21 -> 0.5    // D65
-            22 -> 0.4    // D75
-            else -> 1.0
-        }
-    }
-
     private fun interpolateMatrices(matrix1: DoubleArray, matrix2: DoubleArray, weight: Double): DoubleArray {
         val clampedWeight = weight.coerceIn(0.0, 1.0)
         val result = DoubleArray(9)
@@ -1376,22 +1591,54 @@ class RawRoiProcessor(
     }
 
     private fun extractWhiteBalanceGains(
-        colorCorrectionGains: DoubleArray?,
+        metadata: Map<String, Any?>,
         asShotNeutral: DoubleArray?,
+        colorCorrectionGains: DoubleArray?,
     ): DoubleArray {
-        if (colorCorrectionGains != null && colorCorrectionGains.isNotEmpty()) {
-            val r = colorCorrectionGains.getOrNull(0) ?: 1.0
-            val gEven = colorCorrectionGains.getOrNull(1) ?: 1.0
-            val gOdd = colorCorrectionGains.getOrNull(2) ?: gEven
-            val b = colorCorrectionGains.getOrNull(3) ?: 1.0
-            val g = (gEven + gOdd) / 2.0
-            return doubleArrayOf(r, g, b)
+        val neutralSource = asShotNeutral ?: metadata.toDoubleArray(MetadataKeys.AS_SHOT_NEUTRAL)
+        gainsFromAsShotNeutral(neutralSource)?.let { return it }
+
+        val ccGains = colorCorrectionGains ?: metadata.toDoubleArray(MetadataKeys.COLOR_CORRECTION_GAINS)
+        gainsFromColorCorrection(ccGains)?.let { return it }
+
+        val wbGains = metadata.toDoubleArray("wbGains")
+        gainsFromWbTag(wbGains)?.let { return it }
+
+        return doubleArrayOf(1.0, 1.0, 1.0)
+    }
+
+    private fun gainsFromAsShotNeutral(neutral: DoubleArray?): DoubleArray? {
+        if (neutral == null || neutral.size < 3) return null
+        val safe = DoubleArray(3) { index ->
+            val value = neutral.getOrElse(index) { 1.0 }
+            max(value, 1e-6)
         }
-        val neutral = asShotNeutral ?: doubleArrayOf(1.0, 1.0, 1.0)
-        val r = if (neutral.isNotEmpty() && neutral[0] != 0.0) 1.0 / neutral[0] else 1.0
-        val g = if (neutral.size > 1 && neutral[1] != 0.0) 1.0 / neutral[1] else 1.0
-        val b = if (neutral.size > 2 && neutral[2] != 0.0) 1.0 / neutral[2] else 1.0
+        return doubleArrayOf(1.0 / safe[0], 1.0 / safe[1], 1.0 / safe[2])
+    }
+
+    private fun gainsFromColorCorrection(gains: DoubleArray?): DoubleArray? {
+        if (gains == null || gains.isEmpty()) return null
+        val r = gains.getOrNull(0) ?: return null
+        val gEven = gains.getOrNull(1) ?: return null
+        val gOdd = gains.getOrNull(2) ?: gEven
+        val b = gains.getOrNull(3) ?: return null
+        val g = (gEven + gOdd) / 2.0
         return doubleArrayOf(r, g, b)
+    }
+
+    private fun gainsFromWbTag(values: DoubleArray?): DoubleArray? {
+        if (values == null || values.isEmpty()) return null
+        return when {
+            values.size >= 4 -> {
+                val r = values.getOrNull(0) ?: return null
+                val gEven = values.getOrNull(1) ?: return null
+                val gOdd = values.getOrNull(2) ?: gEven
+                val b = values.getOrNull(3) ?: return null
+                doubleArrayOf(r, (gEven + gOdd) / 2.0, b)
+            }
+            values.size >= 3 -> doubleArrayOf(values[0], values[1], values[2])
+            else -> null
+        }
     }
 
     private data class ColorTransform(
