@@ -14,6 +14,7 @@ import 'package:vector_math/vector_math.dart' show Vector3;
 
 import '../providers/palette_provider.dart';
 import '../services/native_camera_channel.dart';
+import 'camera_calibration_screen.dart';
 import 'display_calibration_screen.dart';
 
 enum RoiMode { raw, jpeg }
@@ -38,7 +39,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   bool _isProcessing = false;
   CameraCaptureResult? _captureResult;
   String? _error;
-  RoiMode _mode = RoiMode.raw;
+  RoiMode _mode = RoiMode.jpeg;
   Rect? _normalizedRoi;
   Offset? _dragStartNormalized;
   double _deltaEThreshold = 2.0;
@@ -576,9 +577,20 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
           title: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _handleTitleTap,
-            child: const Text('Camera Capture'),
+            child: const Text('Camera'),
           ),
           actions: [
+            IconButton(
+              tooltip: 'Calibration',
+              icon: const Icon(Icons.science_outlined),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const CameraCalibrationScreen(),
+                  ),
+                );
+              },
+            ),
             TextButton.icon(
               onPressed: _isCapturing ? null : _handleCapture,
               icon: _isCapturing

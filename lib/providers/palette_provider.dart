@@ -9,6 +9,7 @@ import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
 import 'package:colordesign_tool_core/src/algorithms/color_stimuli.dart';
 import 'package:colordesign_tool_core/src/io/qtx_parser.dart';
 import '../services/persistence.dart';
+import '../services/reflectance_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
@@ -200,10 +201,15 @@ class PaletteProvider extends ChangeNotifier {
     }
     if (stimuli.isEmpty) return null;
 
+    final reflectanceService = ReflectanceService();
+    final enriched = stimuli
+        .map((stimulus) => reflectanceService.ensureSpectralData(stimulus))
+        .toList(growable: false);
+
     final dir = await getApplicationDocumentsDirectory();
     final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
     final path = '${dir.path}${Platform.pathSeparator}palette_$ts.qtx';
-    await saveStimuliToQtx(path, stimuli);
+    await saveStimuliToQtx(path, enriched);
     return path;
   }
 

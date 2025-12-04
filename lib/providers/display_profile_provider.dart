@@ -18,7 +18,7 @@ class DisplayProfileProvider extends ChangeNotifier {
   DisplayProfileProvider() {
     // Default to sRGB profile and apply default brightness policy.
     // Errors from platform brightness are non-fatal.
-    unawaited(_applyBrightness());
+    unawaited(_init());
   }
 
   final DisplayModel _srgbModel = DisplayModel('srgb');
@@ -50,6 +50,15 @@ class DisplayProfileProvider extends ChangeNotifier {
       _gogModel = null;
       _gogError = e.toString();
     }
+  }
+
+  Future<void> _init() async {
+    await loadCalibratedFromAssets();
+    if (_gogModel != null) {
+      _type = DisplayProfileType.calibrated;
+    }
+    await _applyBrightness();
+    notifyListeners();
   }
 
   /// Switch current profile. When selecting calibrated, ensures model is loaded.
@@ -123,4 +132,3 @@ class DisplayProfileProvider extends ChangeNotifier {
         rgb.z > 1;
   }
 }
-

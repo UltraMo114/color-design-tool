@@ -7,7 +7,6 @@ import 'package:vector_math/vector_math.dart' show Vector3;
 import 'providers/palette_provider.dart';
 import 'providers/display_profile_provider.dart';
 import 'screens/camera_capture_screen.dart';
-import 'screens/camera_calibration_screen.dart';
 import 'screens/colorway_screen.dart';
 import 'screens/product_design_screen.dart';
 import 'screens/color_library_search_screen.dart';
@@ -56,7 +55,7 @@ class PaletteScreen extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: 'Camera Capture',
+              tooltip: 'Camera',
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
@@ -83,15 +82,6 @@ class PaletteScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Calibration',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CameraCalibrationScreen()),
-              );
-            },
-            icon: const Icon(Icons.science_outlined),
-          ),
           IconButton(
             tooltip: 'Import QTX',
             onPressed: () async {

@@ -1,4 +1,5 @@
 import 'package:colordesign_tool_core/src/models/color_stimulus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vector_math/vector_math.dart' show Vector3;
@@ -6,12 +7,11 @@ import 'package:vector_math/vector_math.dart' show Vector3;
 import '../providers/display_profile_provider.dart';
 
 import '../services/color_library_service.dart';
+import '../services/access_request_service.dart';
+import '../widgets/request_library_button.dart';
 
 class ColorLibrarySearchScreen extends StatefulWidget {
-  const ColorLibrarySearchScreen({
-    super.key,
-    required this.target,
-  });
+  const ColorLibrarySearchScreen({super.key, required this.target});
 
   final ColorStimulus target;
 
@@ -29,10 +29,20 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
   List<ColorLibrarySource> _sources = const [];
   static const String _allSourcesKey = '__all__';
   String? _selectedLibraryId;
+  AccessRequestService? _accessService;
+  String? _accessError;
 
   @override
   void initState() {
     super.initState();
+    try {
+      final creds = AccessRequestCredentials.fromEnvironment();
+      _accessService = AccessRequestService(credentials: creds);
+    } catch (e, stack) {
+      _accessError = e.toString();
+      debugPrint('Access request service disabled: $e');
+      debugPrint('$stack');
+    }
     _runSearch();
   }
 
@@ -44,8 +54,9 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
     try {
       final service = context.read<ColorLibraryService>();
       await service.ensureLoaded();
-      final enabledSources =
-          service.sources.where((s) => s.enabled).toList(growable: false);
+      final enabledSources = service.sources
+          .where((s) => s.enabled)
+          .toList(growable: false);
       final matches = service.findMatches(
         target: widget.target,
         threshold: _threshold,
@@ -88,13 +99,11 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
     final labText = lab == null
         ? '--'
         : 'L ${lab[0].toStringAsFixed(2)}  '
-            'a ${lab[1].toStringAsFixed(2)}  '
-            'b ${lab[2].toStringAsFixed(2)}';
+              'a ${lab[1].toStringAsFixed(2)}  '
+              'b ${lab[2].toStringAsFixed(2)}';
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Database Matches'),
-      ),
+      appBar: AppBar(title: const Text('Database Matches')),
       body: Column(
         children: [
           Padding(
@@ -121,10 +130,7 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
                         style: theme.textTheme.titleMedium,
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        labText,
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      Text(labText, style: theme.textTheme.bodySmall),
                     ],
                   ),
                 ),
@@ -187,8 +193,9 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
                       ],
                       onChanged: (value) {
                         setState(() {
-                          _selectedLibraryId =
-                              value == _allSourcesKey ? null : value;
+                          _selectedLibraryId = value == _allSourcesKey
+                              ? null
+                              : value;
                           _matches = _filterMatches(_selectedLibraryId);
                         });
                       },
@@ -198,9 +205,24 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
               ),
             ),
           const SizedBox(height: 8),
-          Expanded(
-            child: _buildBody(theme),
-          ),
+          Expanded(child: _buildBody(theme)),
+          if (_selectedLibraryId != null && _accessService != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: RequestLibraryButton(
+                libraryId: _selectedLibraryId!,
+                service: _accessService!,
+              ),
+            )
+          else if (_selectedLibraryId != null && _accessService == null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                _accessError ??
+                    'Email access request is not configured for this build.',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.red),
+              ),
+            ),
         ],
       ),
     );
@@ -250,8 +272,8 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
         final labText = lab == null
             ? '--'
             : 'L ${lab[0].toStringAsFixed(2)}  '
-                'a ${lab[1].toStringAsFixed(2)}  '
-                'b ${lab[2].toStringAsFixed(2)}';
+                  'a ${lab[1].toStringAsFixed(2)}  '
+                  'b ${lab[2].toStringAsFixed(2)}';
 
         final name = s.source.s_name ?? s.u_name ?? s.id;
 
