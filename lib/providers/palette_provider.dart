@@ -22,8 +22,10 @@ class PaletteProvider extends ChangeNotifier {
   int b = 120;
 
   int? _focusedIndex;
+  int? _pendingReplaceIndex;
 
   int? get primarySelection => _focusedIndex;
+  int? get pendingReplaceIndex => _pendingReplaceIndex;
 
   PaletteProvider() {
     _init();
@@ -76,30 +78,45 @@ class PaletteProvider extends ChangeNotifier {
   bool isPositionEmpty(int position) => _manager.isPositionEmpty(position);
 
   void addCurrentColorToNextEmpty() {
-    final pos = _manager.getNextEmptyPosition();
-    if (pos == -1) return;
     final stimulus = _createStimulusFromCurrentRGB();
-    _manager.addColorToPosition(pos, stimulus);
-    _focusedIndex = pos;
-    _persist();
-    notifyListeners();
+    addStimulusToNextEmpty(stimulus, allowReplace: true);
   }
 
-  /// Adds a given [ColorStimulus] to the next empty position. Returns position or -1.
-  int addStimulusToNextEmpty(ColorStimulus stimulus) {
+  /// Adds a given [ColorStimulus] to the next empty position.
+  /// When [allowReplace] is true and there is a pending replace target,
+  /// the stimulus replaces that slot instead.
+  int addStimulusToNextEmpty(ColorStimulus stimulus,
+      {bool allowReplace = false}) {
+    if (allowReplace) {
+      final target = _pendingReplaceIndex;
+      if (target != null) {
+        if (target >= 0 && target < 20) {
+          _manager.addColorToPosition(target, stimulus);
+          _focusedIndex = target;
+        }
+        _pendingReplaceIndex = null;
+        _persist();
+        notifyListeners();
+        return target ?? -1;
+      }
+    }
     final pos = _manager.getNextEmptyPosition();
     if (pos == -1) return -1;
     _manager.addColorToPosition(pos, stimulus);
-    _focusedIndex = pos;
+    _focusNextAvailableSlot();
     _persist();
     notifyListeners();
     return pos;
   }
 
   void removeAt(int position) {
+    if (position < 0 || position >= 20) return;
     _manager.removeColorFromPosition(position);
     if (_focusedIndex == position) {
       _focusedIndex = null;
+    }
+    if (_pendingReplaceIndex == position) {
+      _pendingReplaceIndex = null;
     }
     _persist();
     notifyListeners();
@@ -114,9 +131,42 @@ class PaletteProvider extends ChangeNotifier {
   }
 
   void selectSingle(int position) {
-    if (position < 0 || position >= 20 || isPositionEmpty(position)) return;
+    if (position < 0 || position >= 20) return;
+    _pendingReplaceIndex = null;
     _focusedIndex = position;
     notifyListeners();
+  }
+
+  void clear() {
+    for (var i = 0; i < 20; i++) {
+      if (!isPositionEmpty(i)) {
+        _manager.removeColorFromPosition(i);
+      }
+    }
+    _focusedIndex = null;
+    _pendingReplaceIndex = null;
+    _persist();
+    notifyListeners();
+  }
+
+  int? beginAdjustSelected() {
+    final index = _focusedIndex;
+    if (index == null || isPositionEmpty(index)) return null;
+    _pendingReplaceIndex = index;
+    notifyListeners();
+    return index;
+  }
+
+  void cancelPendingAdjust(int index) {
+    if (_pendingReplaceIndex == index) {
+      _pendingReplaceIndex = null;
+      notifyListeners();
+    }
+  }
+
+  void _focusNextAvailableSlot() {
+    final next = _manager.getNextEmptyPosition();
+    _focusedIndex = next >= 0 ? next : null;
   }
 
   PaletteMatch? findClosestByDeltaE(Vector3 lab, double threshold) {

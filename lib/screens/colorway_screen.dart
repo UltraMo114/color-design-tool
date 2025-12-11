@@ -77,11 +77,19 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canPushColor =
+        (mode == ColorwayMode.ab && selA != null && selB != null) ||
+            (mode == ColorwayMode.ch && selC != null && selH != null);
     final bottomInset = MediaQuery.of(context).padding.bottom;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Colorway'),
         actions: [
+          IconButton(
+            tooltip: 'Clear palette',
+            icon: const Icon(Icons.delete_sweep),
+            onPressed: () => context.read<PaletteProvider>().clear(),
+          ),
           _modeMenu(context),
         ],
       ),
@@ -137,27 +145,16 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed:
-                      (mode == ColorwayMode.ab &&
-                              selA != null &&
-                              selB != null) ||
-                              (mode == ColorwayMode.ch &&
-                                      selC != null &&
-                                      selH != null)
-                          ? () {
-                              if (mode == ColorwayMode.ab) {
-                                final stim = _stimulusFromJab(jValue, selA!, selB!);
-                                context
-                                    .read<PaletteProvider>()
-                                    .addStimulusToNextEmpty(stim);
-                              } else {
-                                final stim = _stimulusFromJch(jValue, selC!, selH!);
-                                context
-                                    .read<PaletteProvider>()
-                                    .addStimulusToNextEmpty(stim);
-                              }
-                            }
-                          : null,
+                  onPressed: canPushColor
+                      ? () {
+                          final stim = mode == ColorwayMode.ab
+                              ? _stimulusFromJab(jValue, selA!, selB!)
+                              : _stimulusFromJch(jValue, selC!, selH!);
+                          context
+                              .read<PaletteProvider>()
+                              .addStimulusToNextEmpty(stim, allowReplace: true);
+                        }
+                      : null,
                   child: const Text('Push'),
                 ),
               ],
@@ -632,12 +629,22 @@ class _MiniPalette extends StatelessWidget {
         final b = (rep.rgb_values[2] * 255).clamp(0, 255).round();
         color = Color.fromRGBO(r, g, b, 1);
       }
-      return Container(
-        width: cell,
-        height: cell,
-        decoration: BoxDecoration(
-          color: color,
-          border: Border.all(color: Colors.black12),
+      final isSelected = p.primarySelection == i;
+      return InkWell(
+        onTap: () => p.selectSingle(i),
+        borderRadius: BorderRadius.circular(4),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: cell,
+          height: cell,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: isSelected ? Colors.amberAccent : Colors.black26,
+              width: isSelected ? 3 : 1,
+            ),
+          ),
         ),
       );
     });

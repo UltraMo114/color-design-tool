@@ -139,6 +139,8 @@ class PaletteScreen extends StatelessWidget {
             children: [
               Expanded(child: _PaletteGrid(provider: provider)),
               const SizedBox(height: 12),
+              _PaletteActions(provider: provider),
+              const SizedBox(height: 12),
               _ColorAttributeCard(provider: provider),
             ],
           ),
@@ -305,6 +307,71 @@ class _ColorAttributeCard extends StatelessWidget {
           Expanded(child: Text(value)),
         ],
       ),
+    );
+  }
+}
+
+class _PaletteActions extends StatelessWidget {
+  const _PaletteActions({required this.provider});
+
+  final PaletteProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedIndex = provider.primarySelection;
+    final hasSelection =
+        selectedIndex != null && !provider.isPositionEmpty(selectedIndex);
+    final pendingIndex = provider.pendingReplaceIndex;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: hasSelection
+                    ? () async {
+                        final idx = provider.beginAdjustSelected();
+                        if (idx == null) return;
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const ColorwayScreen(),
+                          ),
+                        );
+                        provider.cancelPendingAdjust(idx);
+                      }
+                    : null,
+                icon: const Icon(Icons.tune),
+                label: const Text('Adjust in Colorway'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              onPressed:
+                  hasSelection ? () => provider.removeAt(selectedIndex!) : null,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Delete'),
+            ),
+          ],
+        ),
+        if (pendingIndex != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Adjusting slot ${pendingIndex! + 1}. Choose a new color in Colorway.',
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => provider.cancelPendingAdjust(pendingIndex!),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
