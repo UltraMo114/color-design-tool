@@ -19,7 +19,7 @@ class ReflectanceService {
 
   /// Raw Smits (1999) basis data sampled at irregular wavelengths. These values
   /// are ported from `colour.recovery.datasets.smits1999.DATA_SMITS1999`.
-  static const Map<String, Map<double, double>> _smitsBasisRaw = {
+  static final Map<String, Map<double, double>> _smitsBasisRaw = {
     'white': {
       380.0: 1.0,
       417.7778: 1.0,

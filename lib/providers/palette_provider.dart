@@ -132,7 +132,7 @@ class PaletteProvider extends ChangeNotifier {
         appearance.lab_value[1],
         appearance.lab_value[2],
       );
-      final delta = _deltaE76(lab, other);
+      final delta = _deltaE2000(lab, other);
       if (delta < bestDelta) {
         bestDelta = delta;
         bestIndex = i;
@@ -184,11 +184,97 @@ class PaletteProvider extends ChangeNotifier {
     PaletteStorage.instance.save(entries);
   }
 
-  double _deltaE76(Vector3 a, Vector3 b) {
-    final dl = a.x - b.x;
-    final da = a.y - b.y;
-    final db = a.z - b.z;
-    return math.sqrt(dl * dl + da * da + db * db);
+  double _deltaE2000(Vector3 a, Vector3 b) {
+    const double deg2rad = math.pi / 180.0;
+    const double pow25to7 = 6103515625.0; // 25^7 for the compensation term
+
+    final l1 = a.x;
+    final a1 = a.y;
+    final b1 = a.z;
+    final l2 = b.x;
+    final a2 = b.y;
+    final b2 = b.z;
+
+    final c1 = math.sqrt(a1 * a1 + b1 * b1);
+    final c2 = math.sqrt(a2 * a2 + b2 * b2);
+    final cMean = (c1 + c2) / 2.0;
+    final cMean7 = math.pow(cMean, 7).toDouble();
+    final g = 0.5 * (1 - math.sqrt(cMean7 / (cMean7 + pow25to7)));
+
+    final a1Prime = (1 + g) * a1;
+    final a2Prime = (1 + g) * a2;
+    final c1Prime = math.sqrt(a1Prime * a1Prime + b1 * b1);
+    final c2Prime = math.sqrt(a2Prime * a2Prime + b2 * b2);
+
+    final h1Prime = _calcHuePrime(b1, a1Prime);
+    final h2Prime = _calcHuePrime(b2, a2Prime);
+
+    final deltaLPrime = l2 - l1;
+    final deltaCPrime = c2Prime - c1Prime;
+
+    double deltaHuePrime;
+    if (c1Prime * c2Prime == 0) {
+      deltaHuePrime = 0;
+    } else {
+      deltaHuePrime = h2Prime - h1Prime;
+      if (deltaHuePrime > 180) {
+        deltaHuePrime -= 360;
+      } else if (deltaHuePrime < -180) {
+        deltaHuePrime += 360;
+      }
+    }
+    final deltaHPrime = 2 *
+        math.sqrt(c1Prime * c2Prime) *
+        math.sin(deltaHuePrime * deg2rad / 2);
+
+    final lMean = (l1 + l2) / 2.0;
+    final cPrimeMean = (c1Prime + c2Prime) / 2.0;
+
+    double hMean;
+    final hDiff = (h1Prime - h2Prime).abs();
+    if (c1Prime * c2Prime == 0) {
+      hMean = h1Prime + h2Prime;
+    } else if (hDiff <= 180) {
+      hMean = (h1Prime + h2Prime) / 2.0;
+    } else if (h1Prime + h2Prime < 360) {
+      hMean = (h1Prime + h2Prime + 360) / 2.0;
+    } else {
+      hMean = (h1Prime + h2Prime - 360) / 2.0;
+    }
+
+    final t = 1 -
+        0.17 * math.cos((hMean - 30) * deg2rad) +
+        0.24 * math.cos((2 * hMean) * deg2rad) +
+        0.32 * math.cos((3 * hMean + 6) * deg2rad) -
+        0.20 * math.cos((4 * hMean - 63) * deg2rad);
+
+    final hMeanOffset = (hMean - 275) / 25.0;
+    final deltaTheta = 30 * math.exp(-(hMeanOffset * hMeanOffset));
+    final cPrimeMean7 = math.pow(cPrimeMean, 7).toDouble();
+    final rc =
+        2 * math.sqrt(cPrimeMean7 / (cPrimeMean7 + pow25to7));
+    final lMeanDiff = lMean - 50;
+    final lMeanDiff2 = lMeanDiff * lMeanDiff;
+    final sl = 1 + (0.015 * lMeanDiff2) / math.sqrt(20 + lMeanDiff2);
+    final sc = 1 + 0.045 * cPrimeMean;
+    final sh = 1 + 0.015 * cPrimeMean * t;
+    final rt = -rc * math.sin(2 * deltaTheta * deg2rad);
+
+    final lTerm = deltaLPrime / sl;
+    final cTerm = deltaCPrime / sc;
+    final hTerm = deltaHPrime / sh;
+
+    return math.sqrt(
+      lTerm * lTerm + cTerm * cTerm + hTerm * hTerm + rt * cTerm * hTerm,
+    );
+  }
+
+  double _calcHuePrime(double b, double aPrime) {
+    if (aPrime == 0 && b == 0) {
+      return 0;
+    }
+    final hue = math.atan2(b, aPrime) * 180 / math.pi;
+    return hue >= 0 ? hue : hue + 360;
   }
 
   // Export current non-empty palette to app documents directory, returns file path

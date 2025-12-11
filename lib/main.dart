@@ -128,14 +128,20 @@ class PaletteScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Expanded(child: _PaletteGrid(provider: provider)),
-            const SizedBox(height: 12),
-            _ColorAttributeCard(provider: provider),
-          ],
+      body: SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            children: [
+              Expanded(child: _PaletteGrid(provider: provider)),
+              const SizedBox(height: 12),
+              _ColorAttributeCard(provider: provider),
+            ],
+          ),
         ),
       ),
     );

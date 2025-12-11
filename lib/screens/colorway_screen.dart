@@ -77,6 +77,7 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Colorway'),
@@ -247,7 +248,7 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
                     ),
                     Positioned(
                       right: padding + 8,
-                      bottom: 8,
+                      bottom: 8 + bottomInset,
                       child: const _MiniPalette(),
                     ),
                   ],
@@ -256,27 +257,33 @@ class _ColorwayScreenState extends State<ColorwayScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                const Text('Step'),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Slider(
-                    min: 1,
-                    max: 15,
-                    divisions: 14,
-                    value: step.toDouble(),
-                    label: step.toString(),
-                    onChanged: (v) => setState(() => step = v.round()),
+          SafeArea(
+            top: false,
+            left: false,
+            right: false,
+            bottom: true,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  const Text('Step'),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Slider(
+                      min: 1,
+                      max: 15,
+                      divisions: 14,
+                      value: step.toDouble(),
+                      label: step.toString(),
+                      onChanged: (v) => setState(() => step = v.round()),
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: 40,
-                  child: Text(step.toString(), textAlign: TextAlign.right),
-                ),
-              ],
+                  SizedBox(
+                    width: 40,
+                    child: Text(step.toString(), textAlign: TextAlign.right),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

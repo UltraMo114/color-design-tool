@@ -50,27 +50,33 @@ class _ProductDesignScreenState extends State<ProductDesignScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Product Design')),
-      body: LayoutBuilder(builder: (context, constraints) {
-        // 上中下布局：顶部参数区 / 中间颜色排布预览 / 底部指标
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: _buildTopControls(context),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: _buildPreview(context),
+      body: SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: LayoutBuilder(builder: (context, constraints) {
+          // 上中下布局：顶部参数区 / 中间颜色排布预览 / 底部指标
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: _buildTopControls(context),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: _buildMetrics(context),
-            ),
-          ],
-        );
-      }),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: _buildPreview(context),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: _buildMetrics(context),
+              ),
+            ],
+          );
+        }),
+      ),
     );
   }
 

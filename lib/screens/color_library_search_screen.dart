@@ -141,7 +141,7 @@ class _ColorLibrarySearchScreenState extends State<ColorLibrarySearchScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                const Text('ΔE76 threshold'),
+                const Text('ΔE00 threshold'),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Slider(
